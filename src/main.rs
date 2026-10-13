@@ -339,9 +339,7 @@ impl App {
                     }
                     Tab::Queue => self.play_index(sel),
                 }
-                if self.fullscreen {
-                    self.focus = Focus::Player;
-                }
+                self.focus = Focus::Player;
             }
             KeyCode::Char('a') if self.tab == Tab::Results && list_visible => {
                 if let Some(t) = self.results.get(self.results_state.selected()).cloned() {

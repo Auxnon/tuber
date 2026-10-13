@@ -5,7 +5,7 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It nee
 - **Search** uses YouTube Music's own InnerTube API, filtered to songs and called anonymously.
 - **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
 - **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
-- **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, and the playhead grows from a thin line to a full block (`▏`→`█`) as it crosses each column, flashing on beats.
+- **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, and the playhead is a sextant block (`🬏🬓▌🬭🬹█`) that matches the waveform's height at its position, fills its left then right half as it crosses each column, and flashes on beats. It needs a font or terminal with Unicode 13 sextants; kitty, WezTerm, Ghostty, foot and Windows Terminal draw them natively.
 - **Visualizer** reads the exact samples sent to the speakers and draws them with braille dots on a ratatui `Canvas`. It has three modes: spectrum with peak caps, a mirrored waveform, and a triggered oscilloscope.
 
 ## Requirements
@@ -41,4 +41,4 @@ cargo run --release -- daft punk          # search straight away
 | `v` | cycle visualizer mode |
 | `q` | quit |
 
-In fullscreen, picking a song from the list switches back to the player.
+Picking a song from the list moves focus to the player, and in fullscreen that switches the view to the player.

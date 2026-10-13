@@ -18,6 +18,8 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration: Option<u64>,
+    /// Cover art URL (544px), for MPRIS.
+    pub art: Option<String>,
 }
 
 fn post(endpoint: &str, mut body: Value) -> Result<Value> {
@@ -37,6 +39,15 @@ fn text(v: &Value) -> String {
         .as_array()
         .map(|runs| runs.iter().filter_map(|r| r["text"].as_str()).collect())
         .unwrap_or_default()
+}
+
+/// Largest thumbnail, upsized: googleusercontent URLs take the size as a suffix.
+fn art_url(thumbnails: &Value) -> Option<String> {
+    let url = thumbnails.as_array()?.last()?["url"].as_str()?;
+    Some(match url.rfind('=') {
+        Some(i) if url.contains("googleusercontent.com") => format!("{}=w544-h544-l90-rj", &url[..i]),
+        _ => url.to_string(),
+    })
 }
 
 fn parse_duration(s: &str) -> Option<u64> {
@@ -83,6 +94,7 @@ fn parse_list_item(r: &Value) -> Option<Track> {
         artist: segs.first().unwrap_or(&"").to_string(),
         album: segs.get(1).unwrap_or(&"").to_string(),
         duration,
+        art: art_url(&r["thumbnail"]["musicThumbnailRenderer"]["thumbnail"]["thumbnails"]),
     })
 }
 
@@ -111,6 +123,7 @@ pub fn radio(video_id: &str) -> Result<Vec<Track>> {
             artist: text(&r["shortBylineText"]),
             album: segs.get(1).unwrap_or(&"").to_string(),
             duration: parse_duration(&text(&r["lengthText"])),
+            art: art_url(&r["thumbnail"]["thumbnails"]),
         });
     }
     Ok(tracks)

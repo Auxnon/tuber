@@ -1,4 +1,5 @@
 mod envelope;
+mod mpris;
 mod player;
 mod ui;
 mod viz;
@@ -17,6 +18,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use envelope::Envelope;
+use mpris::Mpris;
+use souvlaki::{MediaControlEvent, SeekDirection};
 use player::Player;
 use viz::Visualizer;
 use yt::Track;
@@ -28,6 +31,7 @@ enum Msg {
     Search(Result<Vec<Track>>),
     Radio { seed: String, res: Result<Vec<Track>> },
     Url { id: String, res: Result<String> },
+    Media(MediaControlEvent),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -64,6 +68,7 @@ pub struct App {
     urls: HashMap<String, String>,
     resolving: HashSet<String>,
     pending: Option<String>,
+    mpris: Option<Mpris>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     quit: bool,
@@ -95,6 +100,7 @@ impl App {
             urls: HashMap::new(),
             resolving: HashSet::new(),
             pending: None,
+            mpris: None,
             tx,
             rx,
             quit: false,
@@ -248,6 +254,7 @@ impl App {
                     Err(e) => self.status = format!("radio failed: {e:#}"),
                 }
             }
+            Msg::Media(event) => self.handle_media(event),
             Msg::Url { id, res } => {
                 self.resolving.remove(&id);
                 match res {
@@ -267,6 +274,29 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Media keys, desktop widgets and `playerctl`, via MPRIS.
+    fn handle_media(&mut self, event: MediaControlEvent) {
+        let p = &mut self.player;
+        let step = |dir| if dir == SeekDirection::Forward { 1.0 } else { -1.0 };
+        match event {
+            MediaControlEvent::Play if p.is_paused() => p.toggle_pause(),
+            MediaControlEvent::Pause if !p.is_paused() => p.toggle_pause(),
+            MediaControlEvent::Toggle => p.toggle_pause(),
+            MediaControlEvent::Next => self.next(),
+            MediaControlEvent::Previous => self.prev(),
+            MediaControlEvent::Stop => {
+                p.stop();
+                self.pending = None;
+            }
+            MediaControlEvent::Seek(dir) => p.seek_to(p.position() + step(dir) * SEEK_STEP),
+            MediaControlEvent::SeekBy(dir, by) => p.seek_to(p.position() + step(dir) * by.as_secs_f64()),
+            MediaControlEvent::SetPosition(pos) => p.seek_to(pos.0.as_secs_f64()),
+            MediaControlEvent::SetVolume(v) => p.set_volume(v as f32),
+            MediaControlEvent::Quit => self.quit = true,
+            _ => {}
         }
     }
 
@@ -376,6 +406,11 @@ impl App {
             self.next();
         }
         self.spinner.tick(dt);
+        if let Some(mpris) = &mut self.mpris {
+            let track = self.current.and_then(|i| self.queue.get(i));
+            let p = &self.player;
+            mpris.sync(track, p.is_active() || self.pending.is_some(), p.is_paused(), p.position(), p.volume());
+        }
     }
 }
 
@@ -390,6 +425,10 @@ fn main() -> Result<()> {
     // Open the audio device before taking over the terminal so failures print cleanly.
     let player = Player::new()?;
     let mut app = App::new(player);
+    let tx = app.tx.clone();
+    app.mpris = Mpris::new(move |e| {
+        let _ = tx.send(Msg::Media(e));
+    });
     let query: Vec<String> = std::env::args().skip(1).collect();
     if !query.is_empty() {
         let q = query.join(" ");

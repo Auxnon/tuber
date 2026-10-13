@@ -248,14 +248,35 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 const BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-/// Playhead: a vertical line that widens into a full block across its cell.
-const HEAD: [&str; 8] = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+/// A 2x3 block sextant. Bits are 1 top-left, 2 top-right, 4 mid-left,
+/// 8 mid-right, 16 bottom-left and 32 bottom-right. U+1FB00.. lists the
+/// patterns in order but skips the ones that already exist as ▌, ▐ and █.
+fn sextant(bits: u32) -> char {
+    match bits {
+        0 => ' ',
+        21 => '▌',
+        42 => '▐',
+        63 => '█',
+        n => char::from_u32(0x1FB00 + n - 1 - u32::from(n > 21) - u32::from(n > 42)).unwrap_or('█'),
+    }
+}
+
+/// Playhead glyph: `rows` (1..=3) tall from the bottom; left column only for
+/// the first half of the cell, both columns for the second.
+fn playhead(rows: u32, sub: f32) -> char {
+    const LEFT: [u32; 3] = [16, 4, 1];
+    const RIGHT: [u32; 3] = [32, 8, 2];
+    let bits = (0..rows.clamp(1, 3) as usize).fold(0, |bits, r| {
+        bits | LEFT[r] | if sub >= 0.5 { RIGHT[r] } else { 0 }
+    });
+    sextant(bits)
+}
 
 /// Waveform seekbar: `1:23 ▂▃▅▇▆▅▃●▄▃▂▂▃▄▆▇▆▅ 7:10`.
 /// Column heights come from the whole-track loudness envelope. The played part
 /// takes the visualizer's purple→pink gradient, and the unplayed part stays dim.
-/// The playhead grows ▏→█ as playback crosses its cell (8 steps per column)
-/// and flashes on beats.
+/// The playhead is a sextant matching the waveform height there (3 steps) that
+/// fills its left then right half as playback crosses the cell, and flashes on beats.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -290,13 +311,15 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let span = (hi - lo).max(hi * 0.05).max(1e-6);
     for (c, mean) in means.iter().enumerate() {
         let x = x0 + c as u16;
+        let height = mean.map(|m| (((m - lo) / span * 7.0).round() as usize).min(7));
         if active && c == head {
-            let head_glyph = HEAD[((sub * 8.0) as usize).min(7)];
+            // Waveform height 0..7 → 1..3 sextant rows (0-2, 3-5, 6-7).
+            let rows = height.map_or(1, |h| (h as u32 + 1).div_ceil(3));
             let color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
-            buf.set_string(x, area.y, head_glyph, Style::new().fg(color).bold());
+            buf.set_string(x, area.y, playhead(rows, sub).to_string(), Style::new().fg(color).bold());
             continue;
         }
-        let glyph = mean.map_or("·", |m| BLOCKS[(((m - lo) / span * 7.0).round() as usize).min(7)]);
+        let glyph = height.map_or("·", |h| BLOCKS[h]);
         let played = lerp(p.secondary, p.primary, c as f32 / (w - 1).max(1) as f32);
         let color = match c {
             _ if !active => p.faint,
@@ -318,5 +341,20 @@ fn truncate(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sextant_playhead() {
+        assert_eq!(playhead(1, 0.2), '🬏');
+        assert_eq!(playhead(2, 0.2), '🬓');
+        assert_eq!(playhead(3, 0.2), '▌');
+        assert_eq!(playhead(1, 0.7), '🬭');
+        assert_eq!(playhead(2, 0.7), '🬹');
+        assert_eq!(playhead(3, 0.7), '█');
     }
 }

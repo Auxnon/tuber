@@ -1,7 +1,10 @@
 //! MPRIS (D-Bus media player interface) so desktop widgets, media keys and
-//! `playerctl` can see and control tuber.
+//! `playerctl` can see and control tuber. The player is only registered while
+//! there's something to show: it appears on first playback (not on launch, and
+//! not for a restored-but-paused session) and disappears when playback stops.
 
 use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::yt::Track;
@@ -16,8 +19,12 @@ enum Status {
     Playing,
 }
 
+type Handler = Arc<dyn Fn(MediaControlEvent) + Send + Sync>;
+
 pub struct Mpris {
     controls: MediaControls,
+    handler: Handler,
+    attached: bool,
     track_id: Option<String>,
     status: Status,
     volume: f32,
@@ -26,7 +33,7 @@ pub struct Mpris {
 
 impl Mpris {
     /// `None` when there's no session bus; tuber works fine without it.
-    pub fn new(on_event: impl Fn(MediaControlEvent) + Send + 'static) -> Option<Self> {
+    pub fn new(on_event: impl Fn(MediaControlEvent) + Send + Sync + 'static) -> Option<Self> {
         // souvlaki's service thread unwraps on startup failure, so don't even
         // try without a bus. A per-process name avoids clashes between instances.
         let has_bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some()
@@ -35,14 +42,47 @@ impl Mpris {
             return None;
         }
         let dbus_name = format!("tuber.instance{}", std::process::id());
-        let mut controls =
+        let controls =
             MediaControls::new(PlatformConfig { display_name: "tuber", dbus_name: &dbus_name, hwnd: None }).ok()?;
-        controls.attach(on_event).ok()?;
-        Some(Self { controls, track_id: None, status: Status::Stopped, volume: -1.0, last_update: Instant::now() })
+        Some(Self {
+            controls,
+            handler: Arc::new(on_event),
+            attached: false,
+            track_id: None,
+            status: Status::Stopped,
+            volume: -1.0,
+            last_update: Instant::now(),
+        })
+    }
+
+    /// Register on the bus. A fresh service starts empty, so forget what we sent.
+    fn attach(&mut self) {
+        let handler = self.handler.clone();
+        self.attached = self.controls.attach(move |e| handler(e)).is_ok();
+        self.track_id = None;
+        self.status = Status::Stopped;
+        self.volume = -1.0;
     }
 
     /// Push current state; cheap to call every frame.
     pub fn sync(&mut self, track: Option<&Track>, active: bool, paused: bool, position: f64, volume: f32) {
+        let status = match (track.is_some() && active, paused) {
+            (false, _) => Status::Stopped,
+            (true, true) => Status::Paused,
+            (true, false) => Status::Playing,
+        };
+        match (self.attached, status) {
+            (false, Status::Playing) => self.attach(),
+            (true, Status::Stopped) => {
+                let _ = self.controls.detach();
+                self.attached = false;
+            }
+            _ => {}
+        }
+        if !self.attached {
+            return;
+        }
+
         if track.map(|t| &t.id) != self.track_id.as_ref() {
             self.track_id = track.map(|t| t.id.clone());
             let meta = match track {
@@ -59,11 +99,6 @@ impl Mpris {
             self.last_update = Instant::now() - POSITION_REFRESH; // force a status push
         }
 
-        let status = match (track.is_some() && active, paused) {
-            (false, _) => Status::Stopped,
-            (true, true) => Status::Paused,
-            (true, false) => Status::Playing,
-        };
         if status != self.status || self.last_update.elapsed() >= POSITION_REFRESH {
             let progress = Some(MediaPosition(Duration::from_secs_f64(position.max(0.0))));
             let playback = match status {

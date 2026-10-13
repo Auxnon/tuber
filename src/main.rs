@@ -1,6 +1,7 @@
 mod envelope;
 mod mpris;
 mod player;
+mod session;
 mod ui;
 mod viz;
 mod yt;
@@ -69,6 +70,9 @@ pub struct App {
     resolving: HashSet<String>,
     pending: Option<String>,
     mpris: Option<Mpris>,
+    /// Restored session track to start paused at this position once its URL resolves.
+    resume: Option<(String, f64)>,
+    last_save: Instant,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     quit: bool,
@@ -101,6 +105,8 @@ impl App {
             resolving: HashSet::new(),
             pending: None,
             mpris: None,
+            resume: None,
+            last_save: Instant::now(),
             tx,
             rx,
             quit: false,
@@ -138,6 +144,9 @@ impl App {
 
     fn play_index(&mut self, i: usize) {
         let Some(track) = self.queue.get(i).cloned() else { return };
+        if self.resume.as_ref().is_some_and(|(id, _)| *id != track.id) {
+            self.resume = None;
+        }
         self.current = Some(i);
         self.queue_state.select(i, self.queue.len());
         self.status = format!("{} — {}", track.title, track.artist);
@@ -160,7 +169,53 @@ impl App {
 
     fn start(&mut self, id: &str, url: String) {
         envelope::analyse(&self.envelope, id, &url);
-        self.player.play(url, 0.0);
+        match self.resume.take() {
+            Some((resume_id, at)) if resume_id == id => {
+                self.player.play(url, at);
+                self.player.set_paused(true);
+            }
+            _ => self.player.play(url, 0.0),
+        }
+    }
+
+    fn restore(&mut self, s: session::Session, keep_search: bool) {
+        self.player.set_volume(s.volume);
+        if keep_search {
+            self.input.set_value(s.query);
+            self.results_state = ListState::new(s.results.len());
+            self.results = s.results;
+        }
+        self.queue_state = ListState::new(s.queue.len());
+        self.queue = s.queue;
+        if let Some(track) = s.current.and_then(|i| self.queue.get(i)).cloned() {
+            let i = s.current.unwrap();
+            self.current = Some(i);
+            self.queue_state.select(i, self.queue.len());
+            self.resume = Some((track.id.clone(), s.position));
+            self.pending = Some(track.id.clone());
+            self.resolve(&track.id);
+            self.status = format!("resumed {} — space to play", track.title);
+            self.input.set_focused(false);
+            self.focus = Focus::Player;
+        } else if !self.results.is_empty() {
+            self.input.set_focused(false);
+        }
+    }
+
+    fn snapshot(&self) -> session::Session {
+        let position = match (&self.resume, self.player.is_active()) {
+            (Some((_, at)), _) => *at,
+            (None, true) => self.player.position(),
+            (None, false) => 0.0,
+        };
+        session::Session {
+            query: self.input.value().to_string(),
+            results: self.results.clone(),
+            queue: self.queue.clone(),
+            current: self.current,
+            position,
+            volume: self.player.volume(),
+        }
     }
 
     /// Replace the queue with this track followed by its YouTube Music radio.
@@ -406,10 +461,16 @@ impl App {
             self.next();
         }
         self.spinner.tick(dt);
+        if self.last_save.elapsed() >= Duration::from_secs(5) {
+            let _ = session::save(&self.snapshot());
+            self.last_save = Instant::now();
+        }
         if let Some(mpris) = &mut self.mpris {
             let track = self.current.and_then(|i| self.queue.get(i));
             let p = &self.player;
-            mpris.sync(track, p.is_active() || self.pending.is_some(), p.is_paused(), p.position(), p.volume());
+            // A restored session waiting on its stream URL counts as paused, not playing.
+            let paused = p.is_paused() || self.resume.is_some();
+            mpris.sync(track, p.is_active() || self.pending.is_some(), paused, p.position(), p.volume());
         }
     }
 }
@@ -430,6 +491,9 @@ fn main() -> Result<()> {
         let _ = tx.send(Msg::Media(e));
     });
     let query: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(s) = session::load() {
+        app.restore(s, query.is_empty());
+    }
     if !query.is_empty() {
         let q = query.join(" ");
         app.input.set_value(q.clone());
@@ -439,6 +503,7 @@ fn main() -> Result<()> {
     let mut terminal = ratatui::init();
     let res = run(&mut terminal, &mut app);
     ratatui::restore();
+    let _ = session::save(&app.snapshot());
     res
 }
 

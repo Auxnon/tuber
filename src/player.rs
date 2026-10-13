@@ -183,6 +183,10 @@ impl Player {
             && self.shared.pcm.lock().unwrap().is_empty()
     }
 
+    pub fn set_paused(&self, paused: bool) {
+        self.shared.paused.store(paused, Relaxed);
+    }
+
     pub fn toggle_pause(&self) {
         self.shared.paused.fetch_xor(true, Relaxed);
     }

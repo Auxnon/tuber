@@ -3,6 +3,7 @@
 //! No account, cookies, or API key required.
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::process::Command;
 
@@ -11,7 +12,7 @@ const UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firef
 /// Search filter for the "Songs" tab (same value ytmusicapi uses).
 const SONGS_FILTER: &str = "EgWKAQIIAWoQEAMQBBAJEAoQBRAREBAQFQ%3D%3D";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
     pub title: String,
@@ -19,6 +20,7 @@ pub struct Track {
     pub album: String,
     pub duration: Option<u64>,
     /// Cover art URL (544px), for MPRIS.
+    #[serde(default)]
     pub art: Option<String>,
 }
 

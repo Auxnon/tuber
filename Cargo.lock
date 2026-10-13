@@ -3048,6 +3048,7 @@ dependencies = [
  "ratatui",
  "ratatui-cheese",
  "rustfft",
+ "serde",
  "serde_json",
  "souvlaki",
  "ureq",

@@ -8,7 +8,8 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It nee
 - **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
 - **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
 - **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, and the playhead is a sextant block (`🬏🬓▌🬭🬹█`) that matches the waveform's height at its position, fills its left then right half as it crosses each column, and flashes on beats. It needs a font or terminal with Unicode 13 sextants; kitty, WezTerm, Ghostty, foot and Windows Terminal draw them natively.
-- **MPRIS**: shows up in desktop now-playing widgets (Quickshell, Waybar, GNOME and KDE) with title, artist and cover art. Media keys and `playerctl` can control it.
+- **MPRIS**: shows up in desktop now-playing widgets (Quickshell, Waybar, GNOME and KDE) with title, artist and cover art, but only once something plays. It disappears again when playback stops. Media keys and `playerctl` can control it.
+- **Resume**: the queue, current track, position, volume and last search are saved locally to `~/.local/state/tuber/session.json`, with no account involved. On the next launch the session comes back paused where you left off; press space to continue.
 - **Visualizer** reads the exact samples sent to the speakers and draws them with braille dots on a ratatui `Canvas`. It has three modes: spectrum with peak caps, a mirrored waveform, and a triggered oscilloscope.
 
 <details>

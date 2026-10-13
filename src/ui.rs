@@ -277,6 +277,7 @@ fn playhead(rows: u32, sub: f32) -> char {
 /// takes the visualizer's purple→pink gradient, and the unplayed part stays dim.
 /// The playhead is a sextant matching the waveform height there (3 steps) that
 /// fills its left then right half as playback crosses the cell, and flashes on beats.
+/// Its cell gets a background: unplayed grey when that's exact, a faint tint otherwise.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -316,7 +317,11 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
             // Waveform height 0..7 → 1..3 sextant rows (0-2, 3-5, 6-7).
             let rows = height.map_or(1, |h| (h as u32 + 1).div_ceil(3));
             let color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
-            buf.set_string(x, area.y, playhead(rows, sub).to_string(), Style::new().fg(color).bold());
+            // A cell has one bg, which also fills sub-blocks above the waveform.
+            // At full height nothing is above, so the empty right half can be
+            // the exact unplayed grey; otherwise use a faint full-cell track tint.
+            let bg = if rows == 3 && sub < 0.5 { p.faint } else { p.surface };
+            buf.set_string(x, area.y, playhead(rows, sub).to_string(), Style::new().fg(color).bg(bg).bold());
             continue;
         }
         let glyph = height.map_or("·", |h| BLOCKS[h]);

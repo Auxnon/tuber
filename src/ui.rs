@@ -9,7 +9,7 @@ use ratatui_cheese::input::Input;
 use ratatui_cheese::list::{List, ListItem, ListItemContext};
 use ratatui_cheese::spinner::Spinner;
 
-use crate::viz::VizWidget;
+use crate::viz::{VizWidget, lerp};
 use crate::yt::Track;
 use crate::{App, Tab};
 
@@ -200,22 +200,7 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     VizWidget { viz: &app.viz, from: p.secondary, to: p.primary, peak: Color::Rgb(0xFF, 0xD1, 0xFC) }
         .render(viz_area, f.buffer_mut());
 
-    // Progress: 1:23 ━━━━━━━●────────── 7:10
-    let pos = if app.player.is_active() { app.player.position() } else { 0.0 };
-    let total = track.as_ref().and_then(|t| t.duration).unwrap_or(0) as f64;
-    let (l, r) = (fmt_time(pos as u64), track.as_ref().and_then(|t| t.duration).map(fmt_time).unwrap_or("--:--".into()));
-    let bar_w = (progress.width as usize).saturating_sub(l.len() + r.len() + 2);
-    let filled = if total > 0.0 { ((pos / total).min(1.0) * bar_w as f64) as usize } else { 0 };
-    Line::from(vec![
-        Span::styled(l, Style::new().fg(p.muted)),
-        Span::raw(" "),
-        Span::styled("━".repeat(filled), Style::new().fg(p.primary)),
-        Span::styled(if bar_w > filled { "●" } else { "" }, Style::new().fg(p.foreground)),
-        Span::styled("─".repeat(bar_w.saturating_sub(filled + 1)), Style::new().fg(p.faint)),
-        Span::raw(" "),
-        Span::styled(r, Style::new().fg(p.muted)),
-    ])
-    .render(progress, f.buffer_mut());
+    seekbar(app, track.as_ref(), progress, f.buffer_mut());
 
     let state = if !app.player.is_active() {
         "■ stopped"
@@ -235,6 +220,66 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(format!(" {vol}%"), Style::new().fg(p.muted)),
     ])
     .render(info, f.buffer_mut());
+}
+
+const BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+const KNOB: [&str; 4] = ["·", "•", "●", "◉"];
+
+/// Waveform seekbar: `1:23 ▂▃▅▇▆▅▃●▄▃▂▂▃▄▆▇▆▅ 7:10`.
+/// Column heights come from the whole-track loudness envelope. The played part
+/// takes the visualizer's purple→pink gradient, and the unplayed part stays dim.
+/// The column after the playhead fades in as progress crosses it, which gives
+/// sub-cell smoothness. The knob's size follows loudness and it flashes on beats.
+fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
+    let p = &app.palette;
+    let env = app.envelope.lock().unwrap();
+    let env_ok = track.is_some_and(|t| t.id == env.id);
+    let active = app.player.is_active();
+    let pos = if active { app.player.position() } else { 0.0 };
+    let total = track
+        .and_then(|t| t.duration)
+        .map(|d| d as f64)
+        .or_else(|| (env_ok && env.done).then(|| env.secs()))
+        .unwrap_or(0.0);
+
+    let (l, r) = (fmt_time(pos as u64), if total > 0.0 { fmt_time(total as u64) } else { "--:--".into() });
+    let w = (area.width as usize).saturating_sub(l.len() + r.len() + 2);
+    if w == 0 {
+        return;
+    }
+    buf.set_string(area.x, area.y, &l, Style::new().fg(p.muted));
+    buf.set_string(area.right() - r.len() as u16, area.y, &r, Style::new().fg(p.muted));
+
+    let x0 = area.x + l.len() as u16 + 1;
+    let progress = if total > 0.0 { (pos / total).clamp(0.0, 1.0) * w as f64 } else { 0.0 };
+    let head = (progress as usize).min(w - 1);
+    let sub = progress.fract() as f32;
+    let col_secs = total / w as f64;
+    // Stretch this track's own quietest..loudest column range over the 8 block
+    // heights; normalising to the absolute peak flattens mastered music.
+    let means: Vec<Option<f32>> = (0..w)
+        .map(|c| (env_ok && total > 0.0).then(|| env.mean(c as f64 * col_secs, (c + 1) as f64 * col_secs)).flatten())
+        .collect();
+    let (lo, hi) = means.iter().flatten().fold((f32::MAX, 0.0f32), |(lo, hi), &m| (lo.min(m), hi.max(m)));
+    let span = (hi - lo).max(hi * 0.05).max(1e-6);
+    for (c, mean) in means.iter().enumerate() {
+        let x = x0 + c as u16;
+        if active && c == head {
+            let knob = KNOB[((app.viz.level * KNOB.len() as f32) as usize).min(KNOB.len() - 1)];
+            let color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
+            buf.set_string(x, area.y, knob, Style::new().fg(color).bold());
+            continue;
+        }
+        let glyph = mean.map_or("·", |m| BLOCKS[(((m - lo) / span * 7.0).round() as usize).min(7)]);
+        let played = lerp(p.secondary, p.primary, c as f32 / (w - 1).max(1) as f32);
+        let color = match c {
+            _ if !active => p.faint,
+            c if c < head => played,
+            c if c == head + 1 => lerp(p.faint, played, sub),
+            _ => p.faint,
+        };
+        buf.set_string(x, area.y, glyph, Style::new().fg(color));
+    }
 }
 
 fn fmt_time(secs: u64) -> String {

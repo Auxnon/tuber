@@ -52,6 +52,11 @@ pub struct Visualizer {
     peaks: Vec<f32>,
     scope: Vec<f32>,
     pub mode: Mode,
+    /// Smoothed loudness, 0..1 (fast attack, slow release).
+    pub level: f32,
+    /// Jumps to 1 on a transient, decays each frame — for beat flashes.
+    pub flash: f32,
+    loud_avg: f32,
 }
 
 impl Visualizer {
@@ -68,6 +73,9 @@ impl Visualizer {
             peaks: Vec::new(),
             scope: Vec::new(),
             mode: Mode::Spectrum,
+            level: 0.0,
+            flash: 0.0,
+            loud_avg: 0.0,
         }
     }
 
@@ -108,6 +116,22 @@ impl Visualizer {
             *p = if *s > *p { *s } else { (*p - 0.006).max(0.0) };
         }
 
+        // Loudness + crude beat detection over the most recent ~20ms.
+        let recent = &tap[tap.len().saturating_sub(1024)..];
+        let rms = if live && !recent.is_empty() {
+            (recent.iter().map(|s| s * s).sum::<f32>() / recent.len() as f32).sqrt()
+        } else {
+            0.0
+        };
+        let target = (rms * 3.0).min(1.0);
+        self.level = if target > self.level { target * 0.6 + self.level * 0.4 } else { self.level * 0.9 + target * 0.1 };
+        if rms > 0.05 && rms > self.loud_avg * 1.35 && self.flash < 0.4 {
+            self.flash = 1.0;
+        } else {
+            self.flash *= 0.86;
+        }
+        self.loud_avg = self.loud_avg * 0.95 + rms * 0.05;
+
         self.scope.clear();
         if live {
             let tail = &tap[tap.len().saturating_sub(SCOPE_LEN * 2)..];
@@ -131,11 +155,16 @@ pub struct VizWidget<'a> {
 fn rgb(c: Color) -> (f32, f32, f32) {
     match c {
         Color::Rgb(r, g, b) => (r as f32, g as f32, b as f32),
+        // xterm greyscale ramp
+        Color::Indexed(n @ 232..=255) => {
+            let v = 8.0 + 10.0 * (n - 232) as f32;
+            (v, v, v)
+        }
         _ => (200.0, 200.0, 200.0),
     }
 }
 
-fn lerp(a: Color, b: Color, t: f32) -> Color {
+pub fn lerp(a: Color, b: Color, t: f32) -> Color {
     let (a, b, t) = (rgb(a), rgb(b), t.clamp(0.0, 1.0));
     let mix = |x: f32, y: f32| (x + (y - x) * t).round() as u8;
     Color::Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))

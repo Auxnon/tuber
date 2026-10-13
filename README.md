@@ -5,6 +5,7 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It nee
 - **Search** uses YouTube Music's own InnerTube API, filtered to songs and called anonymously.
 - **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
 - **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
+- **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, the next column fades in for smooth movement, and the playhead knob grows with loudness and flashes on beats.
 - **Visualizer** reads the exact samples sent to the speakers and draws them with braille dots on a ratatui `Canvas`. It has three modes: spectrum with peak caps, a mirrored waveform, and a triggered oscilloscope.
 
 ## Requirements

@@ -1,3 +1,4 @@
+mod envelope;
 mod player;
 mod ui;
 mod viz;
@@ -11,9 +12,11 @@ use ratatui_cheese::spinner::{SpinnerState, SpinnerType};
 use ratatui_cheese::theme::Palette;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use envelope::Envelope;
 use player::Player;
 use viz::Visualizer;
 use yt::Track;
@@ -45,6 +48,7 @@ pub struct App {
     pub player: Player,
     pub viz: Visualizer,
     pub tap: Vec<f32>,
+    pub envelope: Arc<Mutex<Envelope>>,
     pub status: String,
     pub busy: usize,
     pub spinner: SpinnerState,
@@ -73,6 +77,7 @@ impl App {
             player,
             viz: Visualizer::new(),
             tap: Vec::new(),
+            envelope: Arc::default(),
             status: "no sign-in needed — type to search".into(),
             busy: 0,
             spinner: SpinnerState::new(SpinnerType::Dot),
@@ -121,8 +126,8 @@ impl App {
         self.status = format!("{} — {}", track.title, track.artist);
         match self.urls.get(&track.id) {
             Some(url) => {
-                self.player.play(url.clone(), 0.0);
                 self.pending = None;
+                self.start(&track.id, url.clone());
             }
             None => {
                 self.player.stop();
@@ -134,6 +139,11 @@ impl App {
         if let Some(next) = self.queue.get(i + 1).map(|t| t.id.clone()) {
             self.resolve(&next);
         }
+    }
+
+    fn start(&mut self, id: &str, url: String) {
+        envelope::analyse(&self.envelope, id, &url);
+        self.player.play(url, 0.0);
     }
 
     /// Replace the queue with this track followed by its YouTube Music radio.
@@ -234,7 +244,7 @@ impl App {
                         self.urls.insert(id.clone(), url.clone());
                         if self.pending.as_ref() == Some(&id) {
                             self.pending = None;
-                            self.player.play(url, 0.0);
+                            self.start(&id, url);
                         }
                     }
                     Err(e) => {

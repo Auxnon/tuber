@@ -11,7 +11,7 @@ use ratatui_cheese::spinner::Spinner;
 
 use crate::viz::{VizWidget, lerp};
 use crate::yt::Track;
-use crate::{App, Tab};
+use crate::{App, Focus, Tab};
 
 /// Two-line track row in the Bubbles list style: a coloured bar marks the selection.
 struct Row<'a> {
@@ -65,11 +65,13 @@ impl ListItem for Row<'_> {
 pub fn draw(f: &mut Frame, app: &mut App) {
     let p = app.palette.clone();
     let area = f.area().inner(Margin::new(2, 1));
+    let show_list = !app.fullscreen || app.focus == Focus::List;
+    let show_player = !app.fullscreen || app.focus == Focus::Player;
     let [header, _, search, _, body, _, help] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
+        Constraint::Length(if show_list { 2 } else { 0 }),
+        Constraint::Length(if show_list { 1 } else { 0 }),
         Constraint::Fill(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -86,30 +88,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     Paragraph::new(app.status.as_str()).fg(p.muted).render(status, f.buffer_mut());
 
-    let input = Input::new("Search YouTube Music").placeholder("artist, song, album…").prompt("› ").palette(&p);
-    f.render_stateful_widget(input, search, &mut app.input);
+    if show_list {
+        let input = Input::new("Search YouTube Music").placeholder("artist, song, album…").prompt("› ").palette(&p);
+        f.render_stateful_widget(input, search, &mut app.input);
+    }
 
-    let [left, _, right] =
-        Layout::horizontal([Constraint::Percentage(42), Constraint::Length(2), Constraint::Fill(1)]).areas(body);
-    draw_lists(f, app, left);
-    draw_player(f, app, right);
+    if show_list && show_player {
+        let [left, _, right] =
+            Layout::horizontal([Constraint::Percentage(42), Constraint::Length(2), Constraint::Fill(1)]).areas(body);
+        draw_lists(f, app, left);
+        draw_player(f, app, right);
+    } else if show_list {
+        draw_lists(f, app, body);
+    } else {
+        draw_player(f, app, body);
+    }
 
     let bindings = if app.input.focused() {
         vec![Binding::new("enter", "search"), Binding::new("esc", "cancel")]
     } else {
-        let mut b = vec![
-            Binding::new("/", "search"),
-            Binding::new("enter", if app.tab == Tab::Results { "play + radio" } else { "play" }),
-        ];
-        if app.tab == Tab::Results {
-            b.push(Binding::new("a", "enqueue"));
+        let mut b = vec![Binding::new("/", "search")];
+        if show_list {
+            b.push(Binding::new("enter", if app.tab == Tab::Results { "play + radio" } else { "play" }));
+            if app.tab == Tab::Results {
+                b.push(Binding::new("a", "enqueue"));
+            } else {
+                b.push(Binding::new("d", "remove"));
+            }
+        }
+        if app.fullscreen {
+            b.push(Binding::new("f/esc", "exit fullscreen"));
         } else {
-            b.push(Binding::new("d", "remove"));
+            b.push(Binding::new("f", "fullscreen"));
         }
         b.extend([
             Binding::new("space", "pause"),
             Binding::new("n/p", "next/prev"),
-            Binding::new("←/→", "seek"),
+            if app.focus == Focus::List { Binding::new("←/→", "player") } else { Binding::new("←/→", "seek") },
+            if app.focus == Focus::List { Binding::new("↑/↓", "move") } else { Binding::new("↑/↓", "list") },
             Binding::new("+/-", "volume"),
             Binding::new("v", "visualizer"),
             Binding::new("tab", "results/queue"),
@@ -121,7 +137,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_lists(f: &mut Frame, app: &mut App, area: Rect) {
-    let p = &app.palette;
+    // Unfocused: same layout, accents dimmed.
+    let mut p = app.palette.clone();
+    if app.focus != Focus::List {
+        p.primary = p.muted;
+        p.secondary = p.faint;
+    }
+    let p = &p;
     let [tabs, _, list_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     let tab = |label: String, active: bool| {
@@ -165,8 +187,11 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     let p = app.palette.clone();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(if app.player.is_active() { p.secondary } else { p.border }))
-        .title(Line::from(Span::styled(" now playing ", Style::new().fg(p.muted))))
+        .border_style(Style::new().fg(if app.focus == Focus::Player { p.primary } else { p.border }))
+        .title(Line::from(Span::styled(
+            " now playing ",
+            Style::new().fg(if app.focus == Focus::Player { p.primary } else { p.muted }),
+        )))
         .title_bottom(
             Line::from(Span::styled(format!(" {} · v ", app.viz.mode.label()), Style::new().fg(p.faint))).right_aligned(),
         );
@@ -223,13 +248,14 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 const BLOCKS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-const KNOB: [&str; 4] = ["·", "•", "●", "◉"];
+/// Playhead: a vertical line that widens into a full block across its cell.
+const HEAD: [&str; 8] = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
 /// Waveform seekbar: `1:23 ▂▃▅▇▆▅▃●▄▃▂▂▃▄▆▇▆▅ 7:10`.
 /// Column heights come from the whole-track loudness envelope. The played part
 /// takes the visualizer's purple→pink gradient, and the unplayed part stays dim.
-/// The column after the playhead fades in as progress crosses it, which gives
-/// sub-cell smoothness. The knob's size follows loudness and it flashes on beats.
+/// The playhead grows ▏→█ as playback crosses its cell (8 steps per column)
+/// and flashes on beats.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -265,9 +291,9 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     for (c, mean) in means.iter().enumerate() {
         let x = x0 + c as u16;
         if active && c == head {
-            let knob = KNOB[((app.viz.level * KNOB.len() as f32) as usize).min(KNOB.len() - 1)];
+            let head_glyph = HEAD[((sub * 8.0) as usize).min(7)];
             let color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
-            buf.set_string(x, area.y, knob, Style::new().fg(color).bold());
+            buf.set_string(x, area.y, head_glyph, Style::new().fg(color).bold());
             continue;
         }
         let glyph = mean.map_or("·", |m| BLOCKS[(((m - lo) / span * 7.0).round() as usize).min(7)]);
@@ -275,7 +301,6 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
         let color = match c {
             _ if !active => p.faint,
             c if c < head => played,
-            c if c == head + 1 => lerp(p.faint, played, sub),
             _ => p.faint,
         };
         buf.set_string(x, area.y, glyph, Style::new().fg(color));

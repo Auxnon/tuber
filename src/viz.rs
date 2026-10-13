@@ -52,8 +52,6 @@ pub struct Visualizer {
     peaks: Vec<f32>,
     scope: Vec<f32>,
     pub mode: Mode,
-    /// Smoothed loudness, 0..1 (fast attack, slow release).
-    pub level: f32,
     /// Jumps to 1 on a transient, decays each frame — for beat flashes.
     pub flash: f32,
     loud_avg: f32,
@@ -73,7 +71,6 @@ impl Visualizer {
             peaks: Vec::new(),
             scope: Vec::new(),
             mode: Mode::Spectrum,
-            level: 0.0,
             flash: 0.0,
             loud_avg: 0.0,
         }
@@ -116,15 +113,13 @@ impl Visualizer {
             *p = if *s > *p { *s } else { (*p - 0.006).max(0.0) };
         }
 
-        // Loudness + crude beat detection over the most recent ~20ms.
+        // Crude beat detection over the most recent ~20ms.
         let recent = &tap[tap.len().saturating_sub(1024)..];
         let rms = if live && !recent.is_empty() {
             (recent.iter().map(|s| s * s).sum::<f32>() / recent.len() as f32).sqrt()
         } else {
             0.0
         };
-        let target = (rms * 3.0).min(1.0);
-        self.level = if target > self.level { target * 0.6 + self.level * 0.4 } else { self.level * 0.9 + target * 0.1 };
         if rms > 0.05 && rms > self.loud_avg * 1.35 && self.flash < 0.4 {
             self.flash = 1.0;
         } else {

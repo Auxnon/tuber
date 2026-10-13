@@ -5,7 +5,7 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It nee
 - **Search** uses YouTube Music's own InnerTube API, filtered to songs and called anonymously.
 - **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
 - **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
-- **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, the next column fades in for smooth movement, and the playhead knob grows with loudness and flashes on beats.
+- **Waveform seekbar**: shows the shape of the whole track from a quick second ffmpeg pass. The played part is colored with a gradient, and the playhead grows from a thin line to a full block (`▏`→`█`) as it crosses each column, flashing on beats.
 - **Visualizer** reads the exact samples sent to the speakers and draws them with braille dots on a ratatui `Canvas`. It has three modes: spectrum with peak caps, a mirrored waveform, and a triggered oscilloscope.
 
 ## Requirements
@@ -24,16 +24,21 @@ cargo run --release -- daft punk          # search straight away
 
 | key | action |
 | --- | --- |
-| `/` | search |
+| `/` | focus list + search |
 | `enter` | results: play + start radio · queue: jump to track |
 | `a` | add result to queue |
 | `r` | start radio from selected |
 | `d` | remove from queue |
 | `tab` | switch results / queue |
-| `j`/`k`, `J`/`K`, `g`/`G` | move, page, top/bottom |
+| `f` | fullscreen the focused pane (list or player) |
+| `esc` | exit fullscreen |
+| `↑`/`↓` (`k`/`j`) | focus list, then move |
+| `J`/`K`, `g`/`G` | page, top/bottom |
 | `space` | pause |
 | `n` / `p` | next / previous (restarts track if >3s in) |
-| `←`/`→` (`h`/`l`) | seek ±5s |
+| `←`/`→` (`h`/`l`) | focus player, then seek ±5s |
 | `+` / `-` | volume |
 | `v` | cycle visualizer mode |
 | `q` | quit |
+
+In fullscreen, picking a song from the list switches back to the player.

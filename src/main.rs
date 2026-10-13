@@ -31,6 +31,12 @@ enum Msg {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    List,
+    Player,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Results,
     Queue,
@@ -45,6 +51,9 @@ pub struct App {
     pub queue_state: ListState,
     pub current: Option<usize>,
     pub tab: Tab,
+    pub focus: Focus,
+    /// Show only the focused pane.
+    pub fullscreen: bool,
     pub player: Player,
     pub viz: Visualizer,
     pub tap: Vec<f32>,
@@ -74,6 +83,8 @@ impl App {
             queue_state: ListState::new(0),
             current: None,
             tab: Tab::Results,
+            focus: Focus::List,
+            fullscreen: false,
             player,
             viz: Visualizer::new(),
             tap: Vec::new(),
@@ -286,18 +297,31 @@ impl App {
             return;
         }
 
+        let on_list = self.focus == Focus::List;
+        let list_visible = on_list || !self.fullscreen;
         let (list_len, state) = match self.tab {
             Tab::Results => (self.results.len(), &mut self.results_state),
             Tab::Queue => (self.queue.len(), &mut self.queue_state),
         };
         match key.code {
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('f') => self.fullscreen = !self.fullscreen,
+            KeyCode::Esc => self.fullscreen = false,
             KeyCode::Char('/') | KeyCode::Char('s') => {
+                self.focus = Focus::List;
                 self.input.set_value(String::new());
                 self.input.set_focused(true);
             }
             KeyCode::Tab | KeyCode::BackTab => {
+                self.focus = Focus::List;
                 self.tab = if self.tab == Tab::Results { Tab::Queue } else { Tab::Results };
+            }
+            // Arrows first move focus to the pane they belong to, then act within it.
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') if !on_list => {
+                self.focus = Focus::List;
+            }
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') if on_list => {
+                self.focus = Focus::Player;
             }
             KeyCode::Down | KeyCode::Char('j') => state.select_next(list_len, false),
             KeyCode::Up | KeyCode::Char('k') => state.select_prev(list_len, false),
@@ -305,7 +329,7 @@ impl App {
             KeyCode::PageUp | KeyCode::Char('K') => state.prev_page(list_len),
             KeyCode::Char('g') => state.select(0, list_len),
             KeyCode::Char('G') => state.select(list_len.saturating_sub(1), list_len),
-            KeyCode::Enter => {
+            KeyCode::Enter if list_visible => {
                 let sel = state.selected();
                 match self.tab {
                     Tab::Results => {
@@ -315,20 +339,23 @@ impl App {
                     }
                     Tab::Queue => self.play_index(sel),
                 }
+                if self.fullscreen {
+                    self.focus = Focus::Player;
+                }
             }
-            KeyCode::Char('a') if self.tab == Tab::Results => {
+            KeyCode::Char('a') if self.tab == Tab::Results && list_visible => {
                 if let Some(t) = self.results.get(self.results_state.selected()).cloned() {
                     self.enqueue(t);
                 }
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('r') if list_visible => {
                 let sel = state.selected();
                 let list = if self.tab == Tab::Results { &self.results } else { &self.queue };
                 if let Some(t) = list.get(sel).cloned() {
                     self.start_radio(t);
                 }
             }
-            KeyCode::Char('d') | KeyCode::Char('x') if self.tab == Tab::Queue => {
+            KeyCode::Char('d') | KeyCode::Char('x') if self.tab == Tab::Queue && list_visible => {
                 self.remove_from_queue(self.queue_state.selected());
             }
             KeyCode::Char(' ') => self.player.toggle_pause(),

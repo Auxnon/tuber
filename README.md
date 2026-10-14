@@ -34,9 +34,10 @@ cargo run --release -- daft punk          # search straight away
 ## Sign in (optional)
 
 ```sh
-tuber --login            # use the first browser found
-tuber --login firefox    # or name one: chrome, firefox, brave, chromium, edge, vivaldi, opera
-tuber --login 'chrome:Profile 1'
+tuber --login                     # try every browser profile, most recently used first
+tuber --login chrome              # or every profile of one browser: chrome, firefox, brave, chromium, edge, vivaldi, opera
+tuber --login 'chrome:Profile 1'  # or one profile
+tuber --login chrome+gnomekeyring # if Chrome's cookies won't decrypt, name the keyring (gnomekeyring, kwallet, basictext)
 tuber --logout
 ```
 

@@ -524,7 +524,7 @@ usage: tuber [search terms...]
 
 Signing in is optional. It copies the YouTube cookies of a browser that's
 signed in to music.youtube.com (chrome, firefox, brave, chromium, edge,
-vivaldi, opera; first one found by default) into ~/.local/state/tuber/cookies.txt.";
+vivaldi, opera; every profile is tried by default) into ~/.local/state/tuber/cookies.txt.";
 
 /// `--login`/`--logout`/`--help`; `Some` means handled, so exit.
 fn command(args: &[String]) -> Option<Result<()>> {

@@ -19,9 +19,10 @@ use crate::session;
 pub const ORIGIN: &str = "https://music.youtube.com";
 
 /// yt-dlp browser names and where each keeps its profile, in detection order.
-const BROWSERS: [(&str, &str); 9] = [
+const BROWSERS: [(&str, &str); 10] = [
     ("chrome", ".config/google-chrome"),
     ("firefox", ".mozilla/firefox"),
+    ("firefox", ".config/mozilla/firefox"),
     ("firefox", "snap/firefox/common/.mozilla/firefox"),
     ("brave", ".config/BraveSoftware/Brave-Browser"),
     ("chromium", ".config/chromium"),
@@ -78,10 +79,42 @@ fn parse(jar: &str) -> Option<Auth> {
     Some(Auth { sapisid: sapisid?, cookie: cookie.join("; ") })
 }
 
-/// First installed browser, in `BROWSERS` order.
-fn detect() -> Option<&'static str> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    BROWSERS.iter().find(|(_, dir)| home.join(dir).is_dir()).map(|(name, _)| *name)
+/// Profiles to try for a `--cookies-from-browser` spec, as specs. A spec
+/// that names a profile is tried as is. Otherwise every profile of that
+/// browser (every installed browser, with no spec) that has a cookie store,
+/// most recently used first, since yt-dlp alone only reads one of them.
+fn candidates(spec: Option<&str>) -> Vec<String> {
+    if let Some(s) = spec.filter(|s| s.contains(':')) {
+        return vec![s.to_string()];
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
+    let mut found: Vec<(SystemTime, String)> = Vec::new();
+    for (name, dir) in BROWSERS {
+        // `chrome+gnomekeyring` keeps its keyring choice.
+        let base = match spec {
+            Some(s) if s.split('+').next() != Some(name) => continue,
+            Some(s) => s,
+            None => name,
+        };
+        let Ok(entries) = fs::read_dir(home.join(dir)) else { continue };
+        for profile in entries.flatten() {
+            let store = ["Cookies", "Network/Cookies", "cookies.sqlite"]
+                .iter()
+                .find_map(|f| fs::metadata(profile.path().join(f)).ok());
+            if let Some(meta) = store {
+                let used = meta.modified().unwrap_or(UNIX_EPOCH);
+                found.push((used, format!("{base}:{}", profile.file_name().to_string_lossy())));
+            }
+        }
+    }
+    found.sort_by_key(|(used, _)| std::cmp::Reverse(*used));
+    let mut specs: Vec<String> = found.into_iter().map(|(_, s)| s).collect();
+    if specs.is_empty()
+        && let Some(s) = spec
+    {
+        specs.push(s.to_string()); // unknown layout; let yt-dlp pick
+    }
+    specs
 }
 
 /// Create (or truncate) a file only you can read.
@@ -89,35 +122,25 @@ fn private(path: &Path) -> Result<fs::File> {
     Ok(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?)
 }
 
-/// Copy the sign-in from `browser` (or the first one found). Returns the
-/// browser used. Accepts anything yt-dlp's `--cookies-from-browser` does,
-/// e.g. `chrome:Profile 1` or `firefox:default-release`.
-pub fn login(browser: Option<String>) -> Result<(String, Auth)> {
-    let browser = match browser {
-        Some(b) => b,
-        None => detect().context("no supported browser found; name one, e.g. `tuber --login firefox`")?.into(),
-    };
-    let path = path().context("no state directory")?;
-    fs::create_dir_all(path.parent().unwrap())?;
-
-    // yt-dlp dumps the browser's whole jar into --cookies when it exits, so
-    // point it at a scratch file and keep only what tuber needs.
-    let dump = path.with_extension("dump");
-    // yt-dlp loads this file before dumping into it, and rejects an empty one.
-    private(&dump)?.write_all(b"# Netscape HTTP Cookie File\n")?;
+/// Ask yt-dlp for one browser profile's cookies. Returns the YouTube and
+/// Google ones, plus yt-dlp's warnings (decryption and keyring problems
+/// show up there rather than as errors).
+fn export(spec: &str, dump: &Path) -> Result<(String, Vec<String>)> {
+    // yt-dlp loads this file before dumping the browser's jar into it on
+    // exit, and rejects an empty one.
+    private(dump)?.write_all(b"# Netscape HTTP Cookie File\n")?;
     let out = Command::new("yt-dlp")
-        .args(["-q", "--no-warnings", "--skip-download", "--no-playlist", "--cookies-from-browser", &browser])
+        .args(["-q", "--skip-download", "--no-playlist", "--cookies-from-browser", spec])
         .arg("--cookies")
-        .arg(&dump)
+        .arg(dump)
         // Any video will do; yt-dlp needs one to run. This is YouTube's first upload.
         .arg("https://www.youtube.com/watch?v=jNQXAC9IVRw")
         .output()
         .context("running yt-dlp (is it installed?)");
-    let jar = fs::read_to_string(&dump).unwrap_or_default();
-    let _ = fs::remove_file(&dump);
+    let jar = fs::read_to_string(dump).unwrap_or_default();
+    let _ = fs::remove_file(dump);
     let out = out?;
-
-    let kept: String = jar
+    let kept = jar
         .lines()
         .filter(|l| {
             let domain = l.strip_prefix("#HttpOnly_").unwrap_or(l).split('\t').next().unwrap_or("");
@@ -125,20 +148,47 @@ pub fn login(browser: Option<String>) -> Result<(String, Auth)> {
         })
         .map(|l| format!("{l}\n"))
         .collect();
-    let Some(auth) = parse(&kept) else {
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            // Last message, minus progress lines redrawn with \r.
-            let err = err.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("");
-            let err = err.rsplit('\r').next().unwrap_or("").trim_start_matches("yt-dlp: ");
-            bail!("yt-dlp couldn't read {browser}'s cookies: {err}");
+    // Progress lines are redrawn with \r; keep the last state of each.
+    let mut notes: Vec<String> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter_map(|l| l.rsplit('\r').next())
+        .filter(|l| l.starts_with("WARNING") || l.starts_with("ERROR") || l.contains("error:"))
+        .map(|l| l.trim_start_matches("yt-dlp: ").to_string())
+        .collect();
+    notes.dedup();
+    Ok((kept, notes))
+}
+
+/// Copy the sign-in from a browser. `spec` is anything yt-dlp's
+/// `--cookies-from-browser` takes (`chrome`, `chrome:Profile 1`,
+/// `chrome+gnomekeyring`, `firefox`); without one, every installed browser's
+/// profiles are tried. Returns the profile used.
+pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
+    let path = path().context("no state directory")?;
+    fs::create_dir_all(path.parent().unwrap())?;
+    let dump = path.with_extension("dump");
+
+    let specs = candidates(spec.as_deref());
+    if specs.is_empty() {
+        bail!("no supported browser profile found; name one, e.g. `tuber --login firefox`");
+    }
+    let mut report = Vec::new();
+    for s in &specs {
+        let (kept, notes) = export(s, &dump)?;
+        if let Some(auth) = parse(&kept) {
+            let tmp = path.with_extension("txt.tmp");
+            private(&tmp)?.write_all(kept.as_bytes())?;
+            fs::rename(tmp, &path)?;
+            return Ok((s.clone(), auth));
         }
-        bail!("{browser} isn't signed in to YouTube; sign in at {ORIGIN} there, then run this again");
-    };
-    let tmp = path.with_extension("txt.tmp");
-    private(&tmp)?.write_all(kept.as_bytes())?;
-    fs::rename(tmp, &path)?;
-    Ok((browser, auth))
+        let why = if notes.is_empty() { "not signed in to YouTube".into() } else { notes.join("\n    ") };
+        report.push(format!("  {s}: {why}"));
+    }
+    bail!(
+        "no browser profile had a YouTube sign-in. Sign in at {ORIGIN}, or name the profile, \
+         e.g. `tuber --login 'chrome:Profile 1'`.\n{}",
+        report.join("\n")
+    )
 }
 
 /// Forget the sign-in. Returns whether there was one.

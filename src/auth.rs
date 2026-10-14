@@ -152,7 +152,7 @@ fn export(spec: &str, dump: &Path) -> Result<(String, Vec<String>)> {
     let mut notes: Vec<String> = String::from_utf8_lossy(&out.stderr)
         .lines()
         .filter_map(|l| l.rsplit('\r').next())
-        .filter(|l| l.starts_with("WARNING") || l.starts_with("ERROR") || l.contains("error:"))
+        .filter(|l| l.starts_with("ERROR") || l.contains("error:") || l.contains("cookie") || l.contains("keyring"))
         .map(|l| l.trim_start_matches("yt-dlp: ").to_string())
         .collect();
     notes.dedup();
@@ -163,6 +163,19 @@ fn export(spec: &str, dump: &Path) -> Result<(String, Vec<String>)> {
 /// `--cookies-from-browser` takes (`chrome`, `chrome:Profile 1`,
 /// `chrome+gnomekeyring`, `firefox`); without one, every installed browser's
 /// profiles are tried. Returns the profile used.
+/// Keyrings yt-dlp can read Chrome's cookie key from. It guesses which one
+/// from the desktop, and on desktops it doesn't know (Hyprland, sway, …)
+/// it guesses none, so v11-encrypted cookies fail to decrypt.
+const KEYRINGS: [&str; 3] = ["gnomekeyring", "kwallet6", "kwallet5"];
+
+/// `chrome:Profile 1` → `chrome+gnomekeyring:Profile 1`.
+fn with_keyring(spec: &str, keyring: &str) -> String {
+    match spec.split_once(':') {
+        Some((browser, profile)) => format!("{browser}+{keyring}:{profile}"),
+        None => format!("{spec}+{keyring}"),
+    }
+}
+
 pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
     let path = path().context("no state directory")?;
     fs::create_dir_all(path.parent().unwrap())?;
@@ -174,13 +187,27 @@ pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
     }
     let mut report = Vec::new();
     for s in &specs {
-        let (kept, notes) = export(s, &dump)?;
+        let (mut kept, mut notes) = export(s, &dump)?;
+        let mut used = s.clone();
+        // Undecryptable cookies: retry the profile with each keyring.
+        if parse(&kept).is_none() && !s.contains('+') && notes.iter().any(|n| n.contains("cannot decrypt")) {
+            for keyring in KEYRINGS {
+                let attempt = with_keyring(s, keyring);
+                let (k, n) = export(&attempt, &dump)?;
+                if parse(&k).is_some() {
+                    (kept, used) = (k, attempt);
+                    break;
+                }
+                notes.extend(n.into_iter().map(|n| format!("with {keyring}: {n}")));
+            }
+        }
         if let Some(auth) = parse(&kept) {
             let tmp = path.with_extension("txt.tmp");
             private(&tmp)?.write_all(kept.as_bytes())?;
             fs::rename(tmp, &path)?;
-            return Ok((s.clone(), auth));
+            return Ok((used, auth));
         }
+        notes.dedup();
         let why = if notes.is_empty() { "not signed in to YouTube".into() } else { notes.join("\n    ") };
         report.push(format!("  {s}: {why}"));
     }
@@ -217,5 +244,11 @@ mod tests {
         assert_eq!(auth.sapisid, "xyz/A");
         assert!(auth.headers()[1].1.starts_with("SAPISIDHASH "));
         assert!(parse(".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tx\n").is_none());
+    }
+
+    #[test]
+    fn keyring_specs() {
+        assert_eq!(with_keyring("chrome:Profile 1", "gnomekeyring"), "chrome+gnomekeyring:Profile 1");
+        assert_eq!(with_keyring("brave", "kwallet6"), "brave+kwallet6");
     }
 }

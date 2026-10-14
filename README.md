@@ -48,7 +48,7 @@ Sign in to [music.youtube.com](https://music.youtube.com) in your browser first.
 - radio mixes and search are personalised to your account,
 - yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
 
-The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. Chrome-family browsers may ask your keyring for permission the first time. Google no longer lets third-party apps use its device-code sign-in for YouTube Music, so borrowing the browser's session is the way that still works.
+The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. Chrome-family browsers keep the cookie key in your keyring, and yt-dlp reads GNOME Keyring through the Python `secretstorage` module (`python3-secretstorage` on Fedora and Debian), which some distro packages leave out; `--login` tells you if it's missing. The keyring may ask for permission the first time. Google no longer lets third-party apps use its device-code sign-in for YouTube Music, so borrowing the browser's session is the way that still works.
 
 ## Keys
 

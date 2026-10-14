@@ -237,6 +237,16 @@ pub fn login(spec: Option<String>, verify: impl Fn(&Auth) -> Result<String>) -> 
             None => {}
         }
         notes.dedup();
+        // yt-dlp reads GNOME Keyring / KWallet through optional extras; name
+        // the missing one rather than echoing every failed attempt.
+        if notes.iter().any(|n| n.contains("secretstorage")) {
+            notes = vec![
+                "its cookies are locked by GNOME Keyring, which yt-dlp can't open without the Python \
+                 `secretstorage` module: install python3-secretstorage (Fedora, Debian, Ubuntu) or \
+                 python-secretstorage (Arch), or `pip install secretstorage` where yt-dlp's Python can see it"
+                    .into(),
+            ];
+        }
         let why = if notes.is_empty() { "not signed in to YouTube".into() } else { notes.join("\n    ") };
         report.push(format!("  {s}: {why}"));
     }

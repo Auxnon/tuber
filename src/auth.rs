@@ -103,7 +103,8 @@ pub fn login(browser: Option<String>) -> Result<(String, Auth)> {
     // yt-dlp dumps the browser's whole jar into --cookies when it exits, so
     // point it at a scratch file and keep only what tuber needs.
     let dump = path.with_extension("dump");
-    private(&dump)?;
+    // yt-dlp loads this file before dumping into it, and rejects an empty one.
+    private(&dump)?.write_all(b"# Netscape HTTP Cookie File\n")?;
     let out = Command::new("yt-dlp")
         .args(["-q", "--no-warnings", "--skip-download", "--no-playlist", "--cookies-from-browser", &browser])
         .arg("--cookies")
@@ -127,7 +128,9 @@ pub fn login(browser: Option<String>) -> Result<(String, Auth)> {
     let Some(auth) = parse(&kept) else {
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
-            let err = err.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("").trim_start_matches("yt-dlp: ");
+            // Last message, minus progress lines redrawn with \r.
+            let err = err.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("");
+            let err = err.rsplit('\r').next().unwrap_or("").trim_start_matches("yt-dlp: ");
             bail!("yt-dlp couldn't read {browser}'s cookies: {err}");
         }
         bail!("{browser} isn't signed in to YouTube; sign in at {ORIGIN} there, then run this again");

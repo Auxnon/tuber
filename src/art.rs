@@ -81,23 +81,46 @@ fn color(p: &Rgb<u8>) -> Color {
     Color::Rgb(d(p[0]), d(p[1]), d(p[2]))
 }
 
-/// Draw `img` into `area` (see `rect`), dimmed.
+/// Whether pixel (x, y) of a `size`-pixel square lies inside its rounded
+/// corners (radius about 1/8 of the side, measured at pixel centres).
+fn inside(x: u32, y: u32, size: u32) -> bool {
+    let r = (size as f32 / 8.0).max(2.0);
+    let edge = |v: u32| {
+        let c = v as f32 + 0.5;
+        if c < r { r - c } else if c > size as f32 - r { c - (size as f32 - r) } else { 0.0 }
+    };
+    let (dx, dy) = (edge(x), edge(y));
+    dx * dx + dy * dy <= r * r
+}
+
+/// Draw `img` into `area` (see `rect`), dimmed, with rounded corners. Each
+/// cell is `▀` (top pixel as foreground, bottom as background), or `▄`/`▀`
+/// over the terminal background where a corner cuts one pixel off.
 pub fn draw(img: &RgbImage, area: Rect, buf: &mut Buffer) {
     if area.is_empty() {
         return;
     }
-    let scaled = imageops::resize(img, area.width as u32, area.height as u32 * 2, FilterType::Triangle);
+    let size = area.width as u32;
+    let scaled = imageops::resize(img, size, area.height as u32 * 2, FilterType::Triangle);
     for row in 0..area.height {
         for col in 0..area.width {
-            let top = scaled.get_pixel(col as u32, row as u32 * 2);
-            let bottom = scaled.get_pixel(col as u32, row as u32 * 2 + 1);
-            buf[(area.x + col, area.y + row)].set_char('▀').set_fg(color(top)).set_bg(color(bottom));
+            let (x, y) = (col as u32, row as u32 * 2);
+            let top = inside(x, y, size).then(|| color(scaled.get_pixel(x, y)));
+            let bottom = inside(x, y + 1, size).then(|| color(scaled.get_pixel(x, y + 1)));
+            let cell = &mut buf[(area.x + col, area.y + row)];
+            match (top, bottom) {
+                (Some(t), Some(b)) => cell.set_char('▀').set_fg(t).set_bg(b),
+                (Some(t), None) => cell.set_char('▀').set_fg(t).set_bg(Color::Reset),
+                (None, Some(b)) => cell.set_char('▄').set_fg(b).set_bg(Color::Reset),
+                (None, None) => continue,
+            };
         }
     }
 }
 
 /// Average of a cover cell's two pixels: the background for a cell the
-/// visualizer draws over, since it replaces the `▀`.
+/// visualizer draws over, since it replaces the `▀`. Corner cells, half
+/// terminal background, keep the terminal background.
 pub fn blend(top: Color, bottom: Color) -> Color {
     match (top, bottom) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
@@ -117,6 +140,13 @@ mod tests {
         // 4:3 frame, picture in the middle 16:9 band.
         let img = RgbImage::from_fn(48, 36, |_, y| if (5..31).contains(&y) { Rgb([200, 80, 40]) } else { Rgb([0, 0, 0]) });
         assert_eq!(trim(img).dimensions(), (48, 26));
+    }
+
+    #[test]
+    fn rounded_corners() {
+        // 32px square, radius 4.
+        assert!(!inside(0, 0, 32) && !inside(31, 31, 32) && !inside(1, 0, 32));
+        assert!(inside(4, 0, 32) && inside(0, 4, 32) && inside(16, 0, 32) && inside(2, 2, 32));
     }
 
     #[test]

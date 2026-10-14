@@ -244,7 +244,10 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
         Some((_, img)) => {
             // Cover first, then the visualizer on top. Canvas clears its
             // area's background, so render it aside and copy only its dots.
-            let cover = art::rect(viz_area);
+            // Framed like the player panel: a grey rounded border one cell outside.
+            let cover = art::rect(viz_area.inner(Margin::new(1, 1)));
+            let frame = cover.outer(Margin::new(1, 1));
+            Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(p.faint)).render(frame, f.buffer_mut());
             art::draw(img, cover, f.buffer_mut());
             let mut layer = Buffer::empty(viz_area);
             viz.render(viz_area, &mut layer);

@@ -36,6 +36,7 @@ enum Msg {
     Media(MediaControlEvent),
     Account(Result<String>),
     Liked(Result<Vec<Track>>),
+    History(Result<Vec<Track>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,10 @@ pub struct App {
     pub busy: usize,
     /// Signed-in account name, once YouTube confirms it.
     pub account: Option<String>,
+    /// Last song played on another device, offered at launch (`c`).
+    pub offer: Option<Track>,
+    /// Track to add to the account's history once it has really played.
+    report: Option<String>,
     pub spinner: SpinnerState,
     urls: HashMap<String, String>,
     resolving: HashSet<String>,
@@ -106,6 +111,8 @@ impl App {
             status: "no sign-in needed — type to search".into(),
             busy: 0,
             account: None,
+            offer: None,
+            report: None,
             spinner: SpinnerState::new(SpinnerType::Dot),
             urls: HashMap::new(),
             resolving: HashSet::new(),
@@ -165,6 +172,7 @@ impl App {
         }
         self.current = Some(i);
         self.queue_state.select(i, self.queue.len());
+        self.offer = None;
         self.status = format!("{} — {}", track.title, track.artist);
         match self.urls.get(&track.id) {
             Some(url) => {
@@ -185,6 +193,7 @@ impl App {
 
     fn start(&mut self, id: &str, url: String) {
         envelope::analyse(&self.envelope, id, &url);
+        self.report = yt::signed_in().then(|| id.to_string());
         match self.resume.take() {
             Some((resume_id, at)) if resume_id == id => {
                 self.player.play(url, at);
@@ -232,6 +241,20 @@ impl App {
             position,
             volume: self.player.volume(),
         }
+    }
+
+    /// Offer the account's most recent play if it happened somewhere else
+    /// after tuber's session: tuber reports its own plays, so if the newest
+    /// history entry isn't anything this session played, it's from another
+    /// device (or the browser).
+    fn offer_from(&mut self, history: Vec<Track>) {
+        let Some(last) = history.into_iter().next() else { return };
+        let played_here = self.current.and_then(|c| self.queue.get(..=c)).unwrap_or_default();
+        if played_here.iter().any(|t| t.id == last.id) {
+            return;
+        }
+        self.status = format!("last played elsewhere: {} — {} · c to continue", last.title, last.artist);
+        self.offer = Some(last);
     }
 
     /// Replace the queue with this track followed by its YouTube Music radio.
@@ -339,6 +362,10 @@ impl App {
                     Err(e) => self.status = format!("liked songs failed: {e:#}"),
                 }
             }
+            Msg::History(res) => match res {
+                Ok(history) => self.offer_from(history),
+                Err(e) => self.status = format!("history failed: {e:#}"),
+            },
             Msg::Account(res) => match res {
                 Ok(name) => self.account = Some(name),
                 Err(e) => self.status = format!("{e:#}"),
@@ -484,6 +511,12 @@ impl App {
             KeyCode::Char('-') => self.player.set_volume(self.player.volume() - 0.05),
             KeyCode::Char('v') => self.viz.mode = self.viz.mode.next(),
             KeyCode::Char('L') => self.liked(),
+            KeyCode::Char('c') => {
+                if let Some(t) = self.offer.take() {
+                    self.start_radio(t);
+                    self.focus = Focus::Player;
+                }
+            }
             _ => {}
         }
     }
@@ -494,6 +527,12 @@ impl App {
         }
         if self.player.finished() {
             self.next();
+        }
+        // Report a play after 10s, so skipped tracks don't land in history.
+        let p = &self.player;
+        if self.report.is_some() && p.is_active() && !p.is_paused() && p.position() >= 10.0 {
+            let id = self.report.take().unwrap();
+            thread::spawn(move || yt::report_play(&id));
         }
         self.spinner.tick(dt);
         if self.last_save.elapsed() >= Duration::from_secs(5) {
@@ -563,6 +602,7 @@ fn main() -> Result<()> {
         yt::sign_in(a);
         app.status = "signed in — type to search, L for liked songs".into();
         app.spawn(|| Msg::Account(yt::account_name()));
+        app.spawn(|| Msg::History(yt::history()));
     }
     let query = args;
     if let Some(s) = session::load() {

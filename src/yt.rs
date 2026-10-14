@@ -224,6 +224,34 @@ fn playlist(browse_id: &str, post: fn(&str, Value) -> Result<Value>) -> Result<V
     Ok(tracks)
 }
 
+/// The signed-in account's listening history, most recent first. It's shared
+/// by every device on the account (and includes tuber's plays, see
+/// `report_play`).
+pub fn history() -> Result<Vec<Track>> {
+    let resp = post_signed("browse", json!({ "browseId": "FEmusic_history" }))?;
+    let mut items = Vec::new();
+    find(&resp, "musicResponsiveListItemRenderer", &mut items);
+    Ok(items.into_iter().filter_map(parse_list_item).collect())
+}
+
+/// Add a play to the account's history, as the official apps do, by having
+/// yt-dlp send the playback stats ping.
+pub fn report_play(video_id: &str) -> Result<()> {
+    let jar = auth::jar_copy().context("not signed in")?;
+    let out = Command::new("yt-dlp")
+        .args(["-q", "--no-warnings", "--no-playlist", "--skip-download", "--mark-watched"])
+        .args(JS_RUNTIMES)
+        .arg("--cookies")
+        .arg(jar.path())
+        .arg(format!("https://music.youtube.com/watch?v={video_id}"))
+        .output()
+        .context("running yt-dlp (is it installed?)")?;
+    if !out.status.success() {
+        bail!("yt-dlp: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
 /// Display name of the signed-in account.
 pub fn account_name() -> Result<String> {
     account_name_as(AUTH.get().context("not signed in")?)
@@ -253,8 +281,8 @@ pub fn account_name_as(auth: &Auth) -> Result<String> {
 /// Signed in, it passes the cookies too (Premium audio quality, age-restricted
 /// tracks), falling back to anonymous if YouTube refuses that.
 pub fn stream_url(video_id: &str) -> Result<String> {
-    let cookies = auth::path().filter(|p| signed_in() && p.exists());
-    match cookies.map(|c| yt_dlp(video_id, Some(&c))) {
+    let jar = signed_in().then(auth::jar_copy).flatten();
+    match jar.map(|j| yt_dlp(video_id, Some(j.path()))) {
         Some(Ok(url)) => Ok(url),
         _ => yt_dlp(video_id, None),
     }
@@ -270,13 +298,7 @@ fn yt_dlp(video_id: &str, cookies: Option<&std::path::Path>) -> Result<String> {
     let out = cmd
         .arg(format!("https://music.youtube.com/watch?v={video_id}"))
         .output()
-        .context("running yt-dlp (is it installed?)");
-    // yt-dlp writes the jar back when it exits; make sure it stays private.
-    if let Some(c) = cookies {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(c, std::fs::Permissions::from_mode(0o600));
-    }
-    let out = out?;
+        .context("running yt-dlp (is it installed?)")?;
     if !out.status.success() {
         bail!("yt-dlp: {}", String::from_utf8_lossy(&out.stderr).trim());
     }

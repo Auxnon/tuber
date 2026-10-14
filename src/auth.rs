@@ -139,6 +139,33 @@ fn candidates(spec: Option<&str>) -> Vec<String> {
     specs
 }
 
+/// A private copy of the cookie jar for one yt-dlp run, deleted on drop.
+/// yt-dlp rewrites its --cookies file on exit, and runs overlap (stream
+/// prefetch, play reports), so none of them gets the real jar.
+pub struct JarCopy(PathBuf);
+
+impl JarCopy {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for JarCopy {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+pub fn jar_copy() -> Option<JarCopy> {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let src = path()?;
+    let jar = fs::read(&src).ok()?;
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let copy = JarCopy(src.with_extension(format!("{}-{n}.tmp", std::process::id())));
+    private(copy.path()).ok()?.write_all(&jar).ok()?;
+    Some(copy)
+}
+
 /// Create (or truncate) a file only you can read.
 fn private(path: &Path) -> Result<fs::File> {
     Ok(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?)

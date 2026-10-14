@@ -44,6 +44,8 @@ tuber --logout
 Sign in to [music.youtube.com](https://music.youtube.com) in your browser first. `--login` has yt-dlp copy that browser's YouTube cookies into `~/.local/state/tuber/cookies.txt`, readable only by you, and checks them by fetching your account name. While signed in:
 
 - the header shows your account name,
+- songs tuber plays for at least 10 seconds go into your YouTube Music history, like plays from the official apps,
+- at launch, if your history's newest song was played on another device after tuber's last session, tuber offers it: press `c` to play it with a radio mix (from the start; YouTube doesn't sync the position within songs),
 - `L` loads your liked songs,
 - radio mixes and search are personalised to your account,
 - yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
@@ -70,6 +72,7 @@ The cookies are as powerful as your browser's YouTube session, so treat the file
 | `+` / `-` | volume |
 | `v` | cycle visualizer mode |
 | `L` | load your liked songs into results (signed in) |
+| `c` | continue the song last played on another device (when offered) |
 | `q` | quit |
 
 Picking a song from the list moves focus to the player, and in fullscreen that switches the view to the player.

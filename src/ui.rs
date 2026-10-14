@@ -119,6 +119,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         vec![Binding::new("enter", "search"), Binding::new("esc", "cancel")]
     } else {
         let mut b = vec![Binding::new("/", "search")];
+        if app.offer.is_some() {
+            b.insert(0, Binding::new("c", "continue from other device"));
+        }
         if show_list {
             b.push(Binding::new("enter", if app.tab == Tab::Results { "play + radio" } else { "play" }));
             if app.tab == Tab::Results {

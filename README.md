@@ -22,7 +22,7 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It wor
 ## Requirements
 
 `yt-dlp` and `ffmpeg` on your `PATH`, plus ALSA headers to build (`alsa-lib-devel` / `libasound2-dev`).
-Keep yt-dlp up to date. When YouTube changes how stream URLs are signed, updating yt-dlp is usually the fix.
+yt-dlp also needs a JavaScript runtime for YouTube's challenges; tuber lets it use deno, node, bun or quickjs, whichever is installed. Keep yt-dlp up to date. When YouTube changes how stream URLs are signed, updating yt-dlp is usually the fix.
 
 ## Run
 

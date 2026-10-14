@@ -131,6 +131,7 @@ fn export(spec: &str, dump: &Path) -> Result<(String, Vec<String>)> {
     private(dump)?.write_all(b"# Netscape HTTP Cookie File\n")?;
     let out = Command::new("yt-dlp")
         .args(["-q", "--skip-download", "--no-playlist", "--cookies-from-browser", spec])
+        .args(crate::yt::JS_RUNTIMES)
         .arg("--cookies")
         .arg(dump)
         // Any video will do; yt-dlp needs one to run. This is YouTube's first upload.

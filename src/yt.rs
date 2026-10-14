@@ -28,6 +28,11 @@ pub struct Track {
     pub art: Option<String>,
 }
 
+/// yt-dlp only uses deno for YouTube's JavaScript challenges unless told
+/// otherwise; allow the other runtimes it supports (missing ones are skipped).
+pub const JS_RUNTIMES: [&str; 8] =
+    ["--js-runtimes", "deno", "--js-runtimes", "node", "--js-runtimes", "bun", "--js-runtimes", "quickjs"];
+
 /// Max liked songs to load (YouTube pages them 100 at a time).
 const LIKED_MAX: usize = 1000;
 
@@ -248,6 +253,7 @@ pub fn stream_url(video_id: &str) -> Result<String> {
 fn yt_dlp(video_id: &str, cookies: Option<&std::path::Path>) -> Result<String> {
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["-q", "--no-warnings", "--no-playlist", "-f", "bestaudio", "-g"]);
+    cmd.args(JS_RUNTIMES);
     if let Some(c) = cookies {
         cmd.arg("--cookies").arg(c);
     }

@@ -78,9 +78,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(area);
 
-    // Header: badge, spinner, status.
-    let [badge, spin, status] =
-        Layout::horizontal([Constraint::Length(9), Constraint::Length(2), Constraint::Fill(1)]).areas(header);
+    // Header: badge, spinner, status, signed-in account.
+    let who = app.account.as_ref().map(|name| format!("● {name} "));
+    let who_w = who.as_ref().map_or(0, |w| w.chars().count() as u16);
+    let [badge, spin, status, account] = Layout::horizontal([
+        Constraint::Length(9),
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Length(who_w),
+    ])
+    .areas(header);
+    if let Some(who) = who {
+        Line::from(vec![Span::styled("● ", Style::new().fg(p.success)), Span::styled(&who["● ".len()..], Style::new().fg(p.muted))])
+            .render(account, f.buffer_mut());
+    }
     Paragraph::new(" ♫ tuber ").style(Style::new().fg(p.on_highlight).bg(p.secondary).bold()).render(badge, f.buffer_mut());
     let status_area = Rect { x: spin.x + 1, ..spin };
     if app.loading() {
@@ -129,6 +140,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Binding::new("+/-", "volume"),
             Binding::new("v", "visualizer"),
             Binding::new("tab", "results/queue"),
+            Binding::new("L", "liked songs"),
             Binding::new("q", "quit"),
         ]);
         b

@@ -1,3 +1,4 @@
+mod auth;
 mod envelope;
 mod mpris;
 mod player;
@@ -33,6 +34,8 @@ enum Msg {
     Radio { seed: String, res: Result<Vec<Track>> },
     Url { id: String, res: Result<String> },
     Media(MediaControlEvent),
+    Account(Result<String>),
+    Liked(Result<Vec<Track>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +68,8 @@ pub struct App {
     pub envelope: Arc<Mutex<Envelope>>,
     pub status: String,
     pub busy: usize,
+    /// Signed-in account name, once YouTube confirms it.
+    pub account: Option<String>,
     pub spinner: SpinnerState,
     urls: HashMap<String, String>,
     resolving: HashSet<String>,
@@ -100,6 +105,7 @@ impl App {
             envelope: Arc::default(),
             status: "no sign-in needed — type to search".into(),
             busy: 0,
+            account: None,
             spinner: SpinnerState::new(SpinnerType::Dot),
             urls: HashMap::new(),
             resolving: HashSet::new(),
@@ -132,6 +138,16 @@ impl App {
         self.busy += 1;
         self.status = format!("searching “{query}”");
         self.spawn(move || Msg::Search(yt::search(&query)));
+    }
+
+    fn liked(&mut self) {
+        if !yt::signed_in() {
+            self.status = "liked songs need a sign-in: run `tuber --login`".into();
+            return;
+        }
+        self.busy += 1;
+        self.status = "loading liked songs".into();
+        self.spawn(|| Msg::Liked(yt::liked()));
     }
 
     fn resolve(&mut self, id: &str) {
@@ -309,6 +325,24 @@ impl App {
                     Err(e) => self.status = format!("radio failed: {e:#}"),
                 }
             }
+            Msg::Liked(res) => {
+                self.busy -= 1;
+                match res {
+                    Ok(tracks) => {
+                        self.status = format!("{} liked songs", tracks.len());
+                        self.input.set_value("♥ liked songs".into());
+                        self.results_state = ListState::new(tracks.len());
+                        self.results = tracks;
+                        self.tab = Tab::Results;
+                        self.focus = Focus::List;
+                    }
+                    Err(e) => self.status = format!("liked songs failed: {e:#}"),
+                }
+            }
+            Msg::Account(res) => match res {
+                Ok(name) => self.account = Some(name),
+                Err(e) => self.status = format!("{e:#}"),
+            },
             Msg::Media(event) => self.handle_media(event),
             Msg::Url { id, res } => {
                 self.resolving.remove(&id);
@@ -449,6 +483,7 @@ impl App {
             KeyCode::Char('+') | KeyCode::Char('=') => self.player.set_volume(self.player.volume() + 0.05),
             KeyCode::Char('-') => self.player.set_volume(self.player.volume() - 0.05),
             KeyCode::Char('v') => self.viz.mode = self.viz.mode.next(),
+            KeyCode::Char('L') => self.liked(),
             _ => {}
         }
     }
@@ -482,7 +517,48 @@ fn rebuilt(old: &ListState, len: usize) -> ListState {
     s
 }
 
+const USAGE: &str = "\
+usage: tuber [search terms...]
+       tuber --login [browser]   sign in with a browser's YouTube session
+       tuber --logout            forget the sign-in
+
+Signing in is optional. It copies the YouTube cookies of a browser that's
+signed in to music.youtube.com (chrome, firefox, brave, chromium, edge,
+vivaldi, opera; first one found by default) into ~/.local/state/tuber/cookies.txt.";
+
+/// `--login`/`--logout`/`--help`; `Some` means handled, so exit.
+fn command(args: &[String]) -> Option<Result<()>> {
+    match args.first().map(String::as_str) {
+        Some("-h" | "--help") => println!("{USAGE}"),
+        Some("--logout") => match auth::logout() {
+            Ok(true) => println!("signed out"),
+            Ok(false) => println!("wasn't signed in"),
+            Err(e) => return Some(Err(e)),
+        },
+        Some("--login") => {
+            return Some((|| {
+                let (browser, a) = auth::login(args.get(1).cloned())?;
+                yt::sign_in(a);
+                match yt::account_name() {
+                    Ok(name) => println!("signed in as {name} (from {browser})"),
+                    Err(e) => {
+                        let _ = auth::logout();
+                        return Err(e.context(format!("{browser}'s YouTube session didn't work")));
+                    }
+                }
+                Ok(())
+            })());
+        }
+        _ => return None,
+    }
+    Some(Ok(()))
+}
+
 fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(res) = command(&args) {
+        return res;
+    }
     // Open the audio device before taking over the terminal so failures print cleanly.
     let player = Player::new()?;
     let mut app = App::new(player);
@@ -490,7 +566,12 @@ fn main() -> Result<()> {
     app.mpris = Mpris::new(move |e| {
         let _ = tx.send(Msg::Media(e));
     });
-    let query: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(a) = auth::Auth::load() {
+        yt::sign_in(a);
+        app.status = "signed in — type to search, L for liked songs".into();
+        app.spawn(|| Msg::Account(yt::account_name()));
+    }
+    let query = args;
     if let Some(s) = session::load() {
         app.restore(s, query.is_empty());
     }

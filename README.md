@@ -1,10 +1,10 @@
 # tuber
 
-A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It needs no account or sign-in. It draws a braille audio visualizer and uses [ratatui-cheese](https://crates.io/crates/ratatui-cheese) (Charm-style) widgets and colors.
+A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It works without an account, and can optionally use yours. It draws a braille audio visualizer and uses [ratatui-cheese](https://crates.io/crates/ratatui-cheese) (Charm-style) widgets and colors.
 
 ![tuber with search results, spectrum visualizer and waveform seekbar](docs/screenshot.png)
 
-- **Search** uses YouTube Music's own InnerTube API, filtered to songs and called anonymously.
+- **Search** uses YouTube Music's own InnerTube API, filtered to songs. It's anonymous unless you sign in.
 - **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
 - **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
 - **Waveform seekbar**: shows the shape of the whole track (`▁▂▃▄▅▆▇█`) from a quick second ffmpeg pass. The played part takes a purple→pink gradient and the rest stays faint. The playhead is a full-height block that slides across in 1/8-column steps: a block growing in from the left (`▏▎▍▌▋▊▉█`) with the remainder shrinking out of the column behind it (`🮋🮊🮉▐🮈🮇▕`). It flashes on beats, and the columns on either side of it switch to braille at the same height for a finer look. The shrinking half needs Unicode 13 legacy-computing blocks; kitty, WezTerm, Ghostty, foot and Windows Terminal draw them natively.
@@ -31,6 +31,24 @@ cargo run --release                       # start at the search box
 cargo run --release -- daft punk          # search straight away
 ```
 
+## Sign in (optional)
+
+```sh
+tuber --login            # use the first browser found
+tuber --login firefox    # or name one: chrome, firefox, brave, chromium, edge, vivaldi, opera
+tuber --login 'chrome:Profile 1'
+tuber --logout
+```
+
+Sign in to [music.youtube.com](https://music.youtube.com) in your browser first. `--login` has yt-dlp copy that browser's YouTube cookies into `~/.local/state/tuber/cookies.txt`, readable only by you, and checks them by fetching your account name. While signed in:
+
+- the header shows your account name,
+- `L` loads your liked songs,
+- radio mixes and search are personalised to your account,
+- yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
+
+The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. Chrome-family browsers may ask your keyring for permission the first time. Google no longer lets third-party apps use its device-code sign-in for YouTube Music, so borrowing the browser's session is the way that still works.
+
 ## Keys
 
 | key | action |
@@ -50,6 +68,7 @@ cargo run --release -- daft punk          # search straight away
 | `←`/`→` (`h`/`l`) | focus player, then seek ±5s |
 | `+` / `-` | volume |
 | `v` | cycle visualizer mode |
+| `L` | load your liked songs into results (signed in) |
 | `q` | quit |
 
 Picking a song from the list moves focus to the player, and in fullscreen that switches the view to the player.

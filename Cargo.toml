@@ -12,5 +12,6 @@ ratatui-cheese = "0.7.0"
 rustfft = "6.4.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha1_smol = "1.0.1"
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
 ureq = { version = "3.4.2", features = ["json"] }

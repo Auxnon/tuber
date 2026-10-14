@@ -20,12 +20,17 @@ pub struct Session {
     pub volume: f32,
 }
 
-fn path() -> Option<PathBuf> {
+/// `$XDG_STATE_HOME/tuber`, default `~/.local/state/tuber`.
+pub fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(base.join("tuber/session.json"))
+    Some(base.join("tuber"))
+}
+
+fn path() -> Option<PathBuf> {
+    Some(state_dir()?.join("session.json"))
 }
 
 pub fn load() -> Option<Session> {

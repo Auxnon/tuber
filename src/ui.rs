@@ -301,8 +301,8 @@ fn braille(left: usize, right: usize) -> char {
     char::from_u32(0x2800 + bits).unwrap()
 }
 
-/// Every other dot of a braille cell, checkerboard style, for the outer
-/// step of the fade from block bars to the playhead.
+/// Every other dot of a braille cell, checkerboard style, for the step of
+/// the fade right next to the playhead.
 fn dither(c: char) -> char {
     // Dots 1, 3 (left column, rows 1 and 3) and 5, 8 (right, rows 2 and 4).
     const CHECKER: u32 = 0x01 | 0x04 | 0x10 | 0x80;
@@ -322,8 +322,8 @@ fn playhead(sub: f32) -> (char, Option<char>) {
 /// Bar heights come from the whole-track loudness envelope. The played part
 /// takes the visualizer's purple→pink gradient, and the unplayed part stays
 /// faint. The playhead is a full-height block sliding across in eighths (see
-/// `playhead`) that flashes on beats. On each side the bars fade into it:
-/// a dithered braille cell, then a full one at the same height.
+/// `playhead`) that flashes on beats. On each side the bars thin out toward
+/// it: a full braille cell at the same height, then a dithered one.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -380,11 +380,11 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
             c if c == head => (lead, Style::new().fg(head_color).bold()),
             // The trailing block is a step dimmer, like a motion blur.
             c if c == tail => (trail.unwrap(), Style::new().fg(lerp(played, head_color, 0.5))),
-            c if c + 1 == tail => (fine(c), Style::new().fg(played)),
-            c if c + 2 == tail => (dither(fine(c)), Style::new().fg(played)),
+            c if c + 1 == tail => (dither(fine(c)), Style::new().fg(played)),
+            c if c + 2 == tail => (fine(c), Style::new().fg(played)),
             c if c < tail => (block(c), Style::new().fg(played)),
-            c if c == head + 1 => (fine(c), Style::new().fg(p.faint)),
-            c if c == head + 2 => (dither(fine(c)), Style::new().fg(p.faint)),
+            c if c == head + 1 => (dither(fine(c)), Style::new().fg(p.faint)),
+            c if c == head + 2 => (fine(c), Style::new().fg(p.faint)),
             _ => (block(c), Style::new().fg(p.faint)),
         };
         buf.set_string(x, area.y, glyph.to_string(), style);

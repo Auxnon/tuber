@@ -247,6 +247,7 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     .render(info, f.buffer_mut());
 }
 
+const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// Left-aligned eighth blocks, 1/8 .. 8/8 wide.
 const GROW: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 /// Right-aligned eighth blocks, 1/8 .. 7/8 wide.
@@ -269,11 +270,11 @@ fn playhead(sub: f32) -> (char, Option<char>) {
     (GROW[grow], (grow < 7).then(|| SHRINK[6 - grow]))
 }
 
-/// Waveform seekbar: `1:23 ⣠⣴⣾⣷⣶▕▍⣀⣤⣶⣦⣄ 7:10`.
-/// Bar heights come from the whole-track loudness envelope, two braille bars
-/// per cell. The played part takes the visualizer's purple→pink gradient, and
-/// the unplayed part stays faint. The playhead is a full-height block sliding
-/// across in eighths (see `playhead`), and it flashes on beats.
+/// Waveform seekbar: `1:23 ▂▃▅▇⣶▕▍⣤▄▃▂▂▃▄▆ 7:10`.
+/// Bar heights come from the whole-track loudness envelope. The played part
+/// takes the visualizer's purple→pink gradient, and the unplayed part stays
+/// faint. The playhead is a full-height block sliding across in eighths (see
+/// `playhead`) that flashes on beats, with a braille cell on each side.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -298,29 +299,42 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let progress = if total > 0.0 { (pos / total).clamp(0.0, 1.0) * w as f64 } else { 0.0 };
     let head = (progress as usize).min(w - 1);
     let sub = progress.fract() as f32;
-    // Two bars per cell. Stretch this track's own quietest..loudest bar range
-    // over 1..4 dots; normalising to the absolute peak flattens mastered music.
-    let bar_secs = total / (w * 2) as f64;
+    // Two half-columns per cell. Stretch this track's own quietest..loudest
+    // range over the bar heights; normalising to the absolute peak flattens
+    // mastered music.
+    let half_secs = total / (w * 2) as f64;
     let means: Vec<Option<f32>> = (0..w * 2)
-        .map(|b| (env_ok && total > 0.0).then(|| env.mean(b as f64 * bar_secs, (b + 1) as f64 * bar_secs)).flatten())
+        .map(|b| (env_ok && total > 0.0).then(|| env.mean(b as f64 * half_secs, (b + 1) as f64 * half_secs)).flatten())
         .collect();
     let (lo, hi) = means.iter().flatten().fold((f32::MAX, 0.0f32), |(lo, hi), &m| (lo.min(m), hi.max(m)));
     let span = (hi - lo).max(hi * 0.05).max(1e-6);
-    // Unanalysed bars sit at one dot, so the track still reads as a line.
-    let dots = |b: usize| means[b].map_or(1, |m| 1 + (((m - lo) / span * 3.0).round() as usize).min(3));
+    let level = |b: usize| means[b].map(|m| ((m - lo) / span).clamp(0.0, 1.0));
+    // A block bar per cell, or `·` while unanalysed.
+    let block = |c: usize| match (level(2 * c), level(2 * c + 1)) {
+        (Some(a), Some(b)) => BLOCKS[((a + b) / 2.0 * 7.0).round() as usize],
+        _ => '·',
+    };
+    // The cells hugging the playhead switch to braille at the same height,
+    // with each half-column drawn separately (unanalysed sits at one dot).
+    let dots = |b: usize| level(b).map_or(1, |v| 1 + (v * 3.0).round() as usize);
+    let fine = |c: usize| braille(dots(2 * c), dots(2 * c + 1));
 
     let head_color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
     let (lead, trail) = playhead(sub);
+    // First cell of the playhead pair (the trailing block, when there is one).
+    let tail = if trail.is_some() { head.saturating_sub(1) } else { head };
     for c in 0..w {
         let x = x0 + c as u16;
         let played = lerp(p.secondary, p.primary, c as f32 / (w - 1).max(1) as f32);
         let (glyph, style) = match c {
-            _ if !active => (braille(dots(2 * c), dots(2 * c + 1)), Style::new().fg(p.faint)),
+            _ if !active => (block(c), Style::new().fg(p.faint)),
             c if c == head => (lead, Style::new().fg(head_color).bold()),
-            // The trailing half of the playhead is a step dimmer, like a motion blur.
-            c if c + 1 == head && trail.is_some() => (trail.unwrap(), Style::new().fg(lerp(played, head_color, 0.5))),
-            c if c < head => (braille(dots(2 * c), dots(2 * c + 1)), Style::new().fg(played)),
-            _ => (braille(dots(2 * c), dots(2 * c + 1)), Style::new().fg(p.faint)),
+            // The trailing block is a step dimmer, like a motion blur.
+            c if c == tail => (trail.unwrap(), Style::new().fg(lerp(played, head_color, 0.5))),
+            c if c + 1 == tail => (fine(c), Style::new().fg(played)),
+            c if c < tail => (block(c), Style::new().fg(played)),
+            c if c == head + 1 => (fine(c), Style::new().fg(p.faint)),
+            _ => (block(c), Style::new().fg(p.faint)),
         };
         buf.set_string(x, area.y, glyph.to_string(), style);
     }

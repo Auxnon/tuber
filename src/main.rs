@@ -1,3 +1,4 @@
+mod art;
 mod auth;
 mod envelope;
 mod mpris;
@@ -37,6 +38,7 @@ enum Msg {
     Account(Result<String>),
     Liked(Result<Vec<Track>>),
     History(Result<Vec<Track>>),
+    Cover { id: String, res: Result<image::RgbImage> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +73,10 @@ pub struct App {
     pub busy: usize,
     /// Signed-in account name, once YouTube confirms it.
     pub account: Option<String>,
+    /// Now playing track's cover, once downloaded.
+    pub cover: Option<(String, image::RgbImage)>,
+    /// Track whose cover was last requested, so each is fetched once.
+    cover_for: Option<String>,
     /// Last song played on another device, offered at launch (`c`).
     pub offer: Option<Track>,
     /// Track to add to the account's history once it has really played.
@@ -112,6 +118,8 @@ impl App {
             busy: 0,
             account: None,
             offer: None,
+            cover: None,
+            cover_for: None,
             report: None,
             spinner: SpinnerState::new(SpinnerType::Dot),
             urls: HashMap::new(),
@@ -362,6 +370,11 @@ impl App {
                     Err(e) => self.status = format!("liked songs failed: {e:#}"),
                 }
             }
+            Msg::Cover { id, res } => {
+                if let Ok(img) = res {
+                    self.cover = Some((id, img));
+                }
+            }
             Msg::History(res) => match res {
                 Ok(history) => self.offer_from(history),
                 Err(e) => self.status = format!("history failed: {e:#}"),
@@ -527,6 +540,15 @@ impl App {
         }
         if self.player.finished() {
             self.next();
+        }
+        if let Some(t) = self.now_playing()
+            && self.cover_for.as_ref() != Some(&t.id)
+        {
+            let (id, art) = (t.id.clone(), t.art.clone());
+            self.cover_for = Some(id.clone());
+            if let Some(url) = art {
+                self.spawn(move || Msg::Cover { res: art::fetch(&url), id });
+            }
         }
         // Report a play after 10s, so skipped tracks don't land in history.
         let p = &self.player;

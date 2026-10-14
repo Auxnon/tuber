@@ -9,6 +9,7 @@ use ratatui_cheese::input::Input;
 use ratatui_cheese::list::{List, ListItem, ListItemContext};
 use ratatui_cheese::spinner::Spinner;
 
+use crate::art;
 use crate::viz::{VizWidget, lerp};
 use crate::yt::Track;
 use crate::{App, Focus, Tab};
@@ -237,8 +238,32 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     app.player.tap(&mut app.tap);
     let live = app.player.is_active() && !app.player.is_paused();
     app.viz.update(&app.tap, app.player.rate, viz_area.width as usize, live);
-    VizWidget { viz: &app.viz, from: p.secondary, to: p.primary, peak: Color::Rgb(0xFF, 0xD1, 0xFC) }
-        .render(viz_area, f.buffer_mut());
+    let viz = VizWidget { viz: &app.viz, from: p.secondary, to: p.primary, peak: Color::Rgb(0xFF, 0xD1, 0xFC) };
+    match app.cover.as_ref().filter(|(id, _)| track.as_ref().is_some_and(|t| t.id == *id)) {
+        None => viz.render(viz_area, f.buffer_mut()),
+        Some((_, img)) => {
+            // Cover first, then the visualizer on top. Canvas clears its
+            // area's background, so render it aside and copy only its dots.
+            let cover = art::rect(viz_area);
+            art::draw(img, cover, f.buffer_mut());
+            let mut layer = Buffer::empty(viz_area);
+            viz.render(viz_area, &mut layer);
+            let buf = f.buffer_mut();
+            for (x, y) in viz_area.positions().map(|p| (p.x, p.y)) {
+                let dot = &layer[(x, y)];
+                if matches!(dot.symbol(), " " | "\u{2800}") {
+                    continue;
+                }
+                let (symbol, fg) = (dot.symbol().to_string(), dot.fg);
+                let cell = &mut buf[(x, y)];
+                if cover.contains((x, y).into()) {
+                    let bg = art::blend(cell.fg, cell.bg);
+                    cell.set_bg(bg);
+                }
+                cell.set_symbol(&symbol).set_fg(fg);
+            }
+        }
+    }
 
     seekbar(app, track.as_ref(), progress, f.buffer_mut());
 

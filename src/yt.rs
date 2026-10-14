@@ -50,21 +50,18 @@ pub fn signed_in() -> bool {
 /// Signed in when possible; if YouTube rejects the sign-in (say it expired),
 /// search and radio still work anonymously.
 fn post(endpoint: &str, body: Value) -> Result<Value> {
-    match request(endpoint, body.clone(), true) {
-        Err(_) if signed_in() => request(endpoint, body, false),
+    match request(endpoint, body.clone(), AUTH.get()) {
+        Err(_) if signed_in() => request(endpoint, body, None),
         res => res,
     }
 }
 
 /// Only as the signed-in account.
 fn post_signed(endpoint: &str, body: Value) -> Result<Value> {
-    if !signed_in() {
-        bail!("not signed in");
-    }
-    request(endpoint, body, true)
+    request(endpoint, body, Some(AUTH.get().context("not signed in")?))
 }
 
-fn request(endpoint: &str, mut body: Value, signed: bool) -> Result<Value> {
+fn request(endpoint: &str, mut body: Value, auth: Option<&Auth>) -> Result<Value> {
     body["context"] = json!({
         "client": { "clientName": "WEB_REMIX", "clientVersion": "1.20250101.01.00", "hl": "en", "gl": "US" }
     });
@@ -72,7 +69,7 @@ fn request(endpoint: &str, mut body: Value, signed: bool) -> Result<Value> {
         .header("Origin", auth::ORIGIN)
         .header("X-Origin", auth::ORIGIN)
         .header("User-Agent", UA);
-    for (name, value) in AUTH.get().filter(|_| signed).map(Auth::headers).into_iter().flatten() {
+    for (name, value) in auth.map(Auth::headers).into_iter().flatten() {
         req = req.header(name, value);
     }
     let mut resp = req
@@ -229,12 +226,25 @@ fn playlist(browse_id: &str, post: fn(&str, Value) -> Result<Value>) -> Result<V
 
 /// Display name of the signed-in account.
 pub fn account_name() -> Result<String> {
-    let resp = post_signed("account/account_menu", json!({}))?;
+    account_name_as(AUTH.get().context("not signed in")?)
+}
+
+/// Display name of the account these cookies belong to; this is how a
+/// sign-in gets checked.
+pub fn account_name_as(auth: &Auth) -> Result<String> {
+    let resp = request("account/account_menu", json!({}), Some(auth))?;
     let mut names = Vec::new();
     find(&resp, "accountName", &mut names);
-    match names.first().map(|n| text(n)) {
-        Some(name) if !name.is_empty() => Ok(name),
-        _ => bail!("YouTube didn't accept the sign-in; it may have expired (run `tuber --login` again)"),
+    if let Some(name) = names.first().map(|n| text(n)).filter(|n| !n.is_empty()) {
+        return Ok(name);
+    }
+    // YouTube reports whether it saw a sign-in among its tracking params.
+    let mut params = Vec::new();
+    find(&resp["responseContext"], "params", &mut params);
+    let logged_in = params.iter().flat_map(|p| p.as_array().into_iter().flatten()).find(|p| p["key"] == "logged_in");
+    match logged_in.and_then(|p| p["value"].as_str()) {
+        Some("0") => bail!("YouTube treated the cookies as signed out (expired, or signed out in the browser)"),
+        _ => bail!("YouTube didn't return an account name"),
     }
 }
 

@@ -537,15 +537,8 @@ fn command(args: &[String]) -> Option<Result<()>> {
         },
         Some("--login") => {
             return Some((|| {
-                let (browser, a) = auth::login(args.get(1).cloned())?;
-                yt::sign_in(a);
-                match yt::account_name() {
-                    Ok(name) => println!("signed in as {name} (from {browser})"),
-                    Err(e) => {
-                        let _ = auth::logout();
-                        return Err(e.context(format!("{browser}'s YouTube session didn't work")));
-                    }
-                }
+                let (profile, name) = auth::login(args.get(1).cloned(), yt::account_name_as)?;
+                println!("signed in as {name} (from {profile})");
                 Ok(())
             })());
         }

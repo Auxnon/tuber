@@ -35,6 +35,9 @@ const BROWSERS: [(&str, &str); 10] = [
 pub struct Auth {
     cookie: String,
     sapisid: String,
+    /// `__Secure-1PAPISID` / `__Secure-3PAPISID`, which browsers also sign with.
+    sapisid_1p: Option<String>,
+    sapisid_3p: Option<String>,
 }
 
 /// The cookie jar, next to the session file. Readable by you only.
@@ -48,35 +51,54 @@ impl Auth {
     }
 
     /// Headers that make an InnerTube request act as the signed-in account.
+    /// The Authorization value matches what music.youtube.com itself sends:
+    /// one timestamped SHA-1 per APISID cookie.
     pub fn headers(&self) -> [(&'static str, String); 3] {
         let ts = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let hash = sha1_smol::Sha1::from(format!("{ts} {} {ORIGIN}", self.sapisid)).digest().to_string();
+        let hash = |id: &str| sha1_smol::Sha1::from(format!("{ts} {id} {ORIGIN}")).digest().to_string();
+        let mut authorization = format!("SAPISIDHASH {ts}_{}", hash(&self.sapisid));
+        for (scheme, id) in [("SAPISID1PHASH", &self.sapisid_1p), ("SAPISID3PHASH", &self.sapisid_3p)] {
+            if let Some(id) = id {
+                authorization += &format!(" {scheme} {ts}_{}", hash(id));
+            }
+        }
         [
             ("Cookie", self.cookie.clone()),
-            ("Authorization", format!("SAPISIDHASH {ts}_{hash}")),
+            ("Authorization", authorization),
             ("X-Goog-AuthUser", "0".into()),
         ]
     }
 }
 
-/// Netscape cookie jar → `Cookie` header for youtube.com, if it holds a sign-in.
+/// Netscape cookie jar → the `Cookie` header a browser would send to
+/// music.youtube.com, if it holds a sign-in.
 fn parse(jar: &str) -> Option<Auth> {
-    let mut cookie = Vec::new();
-    let mut sapisid = None;
+    let mut cookies: Vec<(String, String)> = Vec::new();
     for line in jar.lines() {
         // HttpOnly cookies are written as comments with this prefix.
         let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
         let f: Vec<&str> = line.split('\t').collect();
-        if line.starts_with('#') || f.len() != 7 || !f[0].ends_with("youtube.com") {
+        // Only cookies music.youtube.com gets: not www./accounts./m.youtube.com ones.
+        if line.starts_with('#') || f.len() != 7 || !matches!(f[0], ".youtube.com" | "youtube.com" | "music.youtube.com")
+        {
             continue;
         }
-        let (name, value) = (f[5], f[6]);
-        if name == "SAPISID" || (name == "__Secure-3PAPISID" && sapisid.is_none()) {
-            sapisid = Some(value.to_string());
+        let (name, value) = (f[5].to_string(), f[6].to_string());
+        // One value per name; a more specific domain wins, as in a browser.
+        match cookies.iter_mut().find(|(n, _)| *n == name) {
+            Some(c) if f[0] == "music.youtube.com" => c.1 = value,
+            Some(_) => {}
+            None => cookies.push((name, value)),
         }
-        cookie.push(format!("{name}={value}"));
     }
-    Some(Auth { sapisid: sapisid?, cookie: cookie.join("; ") })
+    let get = |name: &str| cookies.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    let sapisid_3p = get("__Secure-3PAPISID");
+    Some(Auth {
+        sapisid: get("SAPISID").or_else(|| sapisid_3p.clone())?,
+        sapisid_1p: get("__Secure-1PAPISID"),
+        sapisid_3p,
+        cookie: cookies.iter().map(|(n, v)| format!("{n}={v}")).collect::<Vec<_>>().join("; "),
+    })
 }
 
 /// Profiles to try for a `--cookies-from-browser` spec, as specs. A spec
@@ -177,7 +199,7 @@ fn with_keyring(spec: &str, keyring: &str) -> String {
     }
 }
 
-pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
+pub fn login(spec: Option<String>, verify: impl Fn(&Auth) -> Result<String>) -> Result<(String, String)> {
     let path = path().context("no state directory")?;
     fs::create_dir_all(path.parent().unwrap())?;
     let dump = path.with_extension("dump");
@@ -192,6 +214,7 @@ pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
         let mut used = s.clone();
         // Undecryptable cookies: retry the profile with each keyring.
         if parse(&kept).is_none() && !s.contains('+') && notes.iter().any(|n| n.contains("cannot decrypt")) {
+            notes.retain(|n| !n.contains("cannot decrypt"));
             for keyring in KEYRINGS {
                 let attempt = with_keyring(s, keyring);
                 let (k, n) = export(&attempt, &dump)?;
@@ -202,11 +225,16 @@ pub fn login(spec: Option<String>) -> Result<(String, Auth)> {
                 notes.extend(n.into_iter().map(|n| format!("with {keyring}: {n}")));
             }
         }
-        if let Some(auth) = parse(&kept) {
-            let tmp = path.with_extension("txt.tmp");
-            private(&tmp)?.write_all(kept.as_bytes())?;
-            fs::rename(tmp, &path)?;
-            return Ok((used, auth));
+        // Cookies can outlive the session they belong to, so ask YouTube.
+        match parse(&kept).map(|auth| verify(&auth)) {
+            Some(Ok(name)) => {
+                let tmp = path.with_extension("txt.tmp");
+                private(&tmp)?.write_all(kept.as_bytes())?;
+                fs::rename(tmp, &path)?;
+                return Ok((used, name));
+            }
+            Some(Err(e)) => notes.push(format!("{e:#}")),
+            None => {}
         }
         notes.dedup();
         let why = if notes.is_empty() { "not signed in to YouTube".into() } else { notes.join("\n    ") };
@@ -244,6 +272,13 @@ mod tests {
         assert_eq!(auth.cookie, "PREF=f6=40000000; SID=abc; SAPISID=xyz/A");
         assert_eq!(auth.sapisid, "xyz/A");
         assert!(auth.headers()[1].1.starts_with("SAPISIDHASH "));
+        let jar = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\ta\n\
+            www.youtube.com\tFALSE\t/\tTRUE\t0\tSAPISID\tstale\n\
+            .youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PAPISID\tc\n";
+        let auth = parse(jar).unwrap();
+        assert_eq!(auth.cookie, "SAPISID=a; __Secure-3PAPISID=c");
+        let header = &auth.headers()[1].1;
+        assert!(header.contains(" SAPISID3PHASH ") && !header.contains("SAPISID1PHASH"), "{header}");
         assert!(parse(".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tx\n").is_none());
     }
 

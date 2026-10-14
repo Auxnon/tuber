@@ -288,33 +288,14 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-/// Left-aligned eighth blocks, 1/8 .. 8/8 wide.
-const GROW: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
-/// Right-aligned eighth blocks, 1/8 .. 7/8 wide.
-const SHRINK: [char; 7] = ['▕', '\u{1FB87}', '\u{1FB88}', '▐', '\u{1FB89}', '\u{1FB8A}', '\u{1FB8B}'];
 
-/// Braille cell with two bars filled from the bottom, each 0..=4 dots tall.
-fn braille(left: usize, right: usize) -> char {
-    const L: [u32; 4] = [0x40, 0x04, 0x02, 0x01];
-    const R: [u32; 4] = [0x80, 0x20, 0x10, 0x08];
-    let bits = L[..left.min(4)].iter().sum::<u32>() + R[..right.min(4)].iter().sum::<u32>();
-    char::from_u32(0x2800 + bits).unwrap()
-}
-
-/// Playhead pair for `sub` (0..1) of the way across the head cell: a block
-/// growing from the head cell's left edge, plus the block shrinking into the
-/// right edge of the cell behind it. Together they're always one cell wide,
-/// so the playhead slides in 1/8-cell steps.
-fn playhead(sub: f32) -> (char, Option<char>) {
-    let grow = ((sub * 8.0) as usize).min(7);
-    (GROW[grow], (grow < 7).then(|| SHRINK[6 - grow]))
-}
-
-/// Waveform seekbar: `1:23 ▂▃▅▇⣶▕▍⣤▄▃▂▂▃▄▆ 7:10`.
+/// Waveform seekbar: `1:23 ▂▃▅▇▆▅▃▄▃▂▂▃▄▆▇▆▅ 7:10`.
 /// Bar heights come from the whole-track loudness envelope. The played part
 /// takes the visualizer's purple→pink gradient, and the unplayed part stays
-/// faint. The playhead is a full-height block sliding across in eighths (see
-/// `playhead`) that flashes on beats, with a braille cell on each side.
+/// faint. The playhead lights up the bars it's on (background glow plus a
+/// brighter bar), so the waveform is never interrupted: it cross-fades
+/// between the two cells nearest the exact position to move smoothly, and
+/// flashes on beats.
 fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let env = app.envelope.lock().unwrap();
@@ -337,48 +318,39 @@ fn seekbar(app: &App, track: Option<&Track>, area: Rect, buf: &mut Buffer) {
 
     let x0 = area.x + l.len() as u16 + 1;
     let progress = if total > 0.0 { (pos / total).clamp(0.0, 1.0) * w as f64 } else { 0.0 };
-    let head = (progress as usize).min(w - 1);
-    let sub = progress.fract() as f32;
-    // Two half-columns per cell. Stretch this track's own quietest..loudest
-    // range over the bar heights; normalising to the absolute peak flattens
-    // mastered music.
-    let half_secs = total / (w * 2) as f64;
-    let means: Vec<Option<f32>> = (0..w * 2)
-        .map(|b| (env_ok && total > 0.0).then(|| env.mean(b as f64 * half_secs, (b + 1) as f64 * half_secs)).flatten())
+    // Stretch this track's own quietest..loudest column range over the 8
+    // heights; normalising to the absolute peak flattens mastered music.
+    let col_secs = total / w as f64;
+    let means: Vec<Option<f32>> = (0..w)
+        .map(|c| (env_ok && total > 0.0).then(|| env.mean(c as f64 * col_secs, (c + 1) as f64 * col_secs)).flatten())
         .collect();
     let (lo, hi) = means.iter().flatten().fold((f32::MAX, 0.0f32), |(lo, hi), &m| (lo.min(m), hi.max(m)));
     let span = (hi - lo).max(hi * 0.05).max(1e-6);
-    let level = |b: usize| means[b].map(|m| ((m - lo) / span).clamp(0.0, 1.0));
-    // A block bar per cell, or `·` while unanalysed.
-    let block = |c: usize| match (level(2 * c), level(2 * c + 1)) {
-        (Some(a), Some(b)) => BLOCKS[((a + b) / 2.0 * 7.0).round() as usize],
-        _ => '·',
-    };
-    // The cells hugging the playhead switch to braille at the same height,
-    // with each half-column drawn separately (unanalysed sits at one dot).
-    let dots = |b: usize| level(b).map_or(1, |v| 1 + (v * 3.0).round() as usize);
-    let fine = |c: usize| braille(dots(2 * c), dots(2 * c + 1));
 
     let head_color = lerp(p.primary, Color::Rgb(0xFF, 0xF0, 0xFF), app.viz.flash * 0.85);
-    let (lead, trail) = playhead(sub);
-    // First cell of the playhead pair (the trailing block, when there is one).
-    let tail = if trail.is_some() { head.saturating_sub(1) } else { head };
-    for c in 0..w {
-        let x = x0 + c as u16;
-        let played = lerp(p.secondary, p.primary, c as f32 / (w - 1).max(1) as f32);
-        let (glyph, style) = match c {
-            _ if !active => (block(c), Style::new().fg(p.faint)),
-            c if c == head => (lead, Style::new().fg(head_color).bold()),
-            // The trailing block is a step dimmer, like a motion blur.
-            c if c == tail => (trail.unwrap(), Style::new().fg(lerp(played, head_color, 0.5))),
-            c if c + 1 == tail => (fine(c), Style::new().fg(played)),
-            c if c < tail => (block(c), Style::new().fg(played)),
-            c if c == head + 1 => (fine(c), Style::new().fg(p.faint)),
-            _ => (block(c), Style::new().fg(p.faint)),
+    for (c, mean) in means.iter().enumerate() {
+        let glyph = mean.map_or('·', |m| BLOCKS[(((m - lo) / span * 7.0).round() as usize).min(7)]);
+        let centre = c as f64 + 0.5;
+        let fg = match () {
+            _ if !active || centre >= progress => p.faint,
+            _ => lerp(p.secondary, p.primary, c as f32 / (w - 1).max(1) as f32),
         };
-        buf.set_string(x, area.y, glyph.to_string(), style);
+        let mut style = Style::new().fg(fg);
+        // Glow strength falls off linearly over one cell either side of the
+        // exact position, so it slides between cells instead of jumping.
+        let glow = (1.0 - (centre - progress).abs()) as f32;
+        if active && glow > 0.15 {
+            // Light the bar too, or a loud (nearly full) bar hides the glow;
+            // brighter than the background so its shape still shows.
+            style = style.bg(lerp(GLOW_BASE, head_color, glow * 0.75)).fg(lerp(fg, Color::Rgb(0xFF, 0xF0, 0xFF), glow));
+        }
+        buf.set_string(x0 + c as u16, area.y, glyph.to_string(), style);
     }
 }
+
+/// What the playhead glow fades from: a near-black that sits close to most
+/// dark terminal backgrounds (the real one can't be known).
+const GLOW_BASE: Color = Color::Rgb(0x1c, 0x1a, 0x22);
 
 fn fmt_time(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
@@ -391,25 +363,5 @@ fn truncate(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
         t.push('…');
         t
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn braille_bars() {
-        assert_eq!(braille(0, 0), '⠀');
-        assert_eq!(braille(1, 0), '⡀');
-        assert_eq!(braille(4, 4), '⣿');
-        assert_eq!(braille(2, 3), '⣴');
-    }
-
-    #[test]
-    fn sliding_playhead() {
-        assert_eq!(playhead(0.0), ('▏', Some('\u{1FB8B}')));
-        assert_eq!(playhead(0.5), ('▋', Some('\u{1FB88}')));
-        assert_eq!(playhead(0.95), ('█', None));
     }
 }

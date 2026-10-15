@@ -284,26 +284,22 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     volume(app, info, f.buffer_mut());
 }
 
-/// Right-aligned volume: a pie and the level while it's steady, the full bar
+/// Right-aligned volume: a pie and the level, with the full bar between them
 /// while it's being changed.
 fn volume(app: &App, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
     let vol = (app.player.volume() * 100.0).round() as u32;
     // Past 100% is a boost; colour it so it's noticed.
     let color = if vol > 100 { p.primary } else { p.secondary };
-    let line = if app.adjusting_volume() {
+    let mut spans = vec![Span::styled(format!("{} ", pie(vol)), Style::new().fg(color))];
+    if app.adjusting_volume() {
         let bar: String = (0..10).map(|i| if i * 10 < vol { '▮' } else { '▯' }).collect();
-        Line::from(vec![
-            Span::styled("vol ", Style::new().fg(p.faint)),
-            Span::styled(bar, Style::new().fg(color)),
-            Span::styled(format!(" {vol:>3}"), Style::new().fg(p.muted)),
-        ])
+        spans.push(Span::styled(bar, Style::new().fg(color)));
+        spans.push(Span::styled(format!(" {vol:>3}"), Style::new().fg(p.muted)));
     } else {
-        Line::from(vec![
-            Span::styled(pie(vol).to_string(), Style::new().fg(color)),
-            Span::styled(format!(" {vol}"), Style::new().fg(p.muted)),
-        ])
-    };
+        spans.push(Span::styled(vol.to_string(), Style::new().fg(p.muted)));
+    }
+    let line = Line::from(spans);
     line.right_aligned().render(area, buf);
 }
 

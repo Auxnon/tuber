@@ -283,7 +283,7 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     volume(app, info, f.buffer_mut());
 }
 
-/// Right-aligned volume: a pie while it's steady, the full bar and percentage
+/// Right-aligned volume: a pie and the level while it's steady, the full bar
 /// while it's being changed.
 fn volume(app: &App, area: Rect, buf: &mut Buffer) {
     let p = &app.palette;
@@ -295,10 +295,13 @@ fn volume(app: &App, area: Rect, buf: &mut Buffer) {
         Line::from(vec![
             Span::styled("vol ", Style::new().fg(p.faint)),
             Span::styled(bar, Style::new().fg(color)),
-            Span::styled(format!(" {vol:>3}%"), Style::new().fg(p.muted)),
+            Span::styled(format!(" {vol:>3}"), Style::new().fg(p.muted)),
         ])
     } else {
-        Line::from(Span::styled(pie(vol).to_string(), Style::new().fg(color)))
+        Line::from(vec![
+            Span::styled(pie(vol).to_string(), Style::new().fg(color)),
+            Span::styled(format!(" {vol}"), Style::new().fg(p.muted)),
+        ])
     };
     line.right_aligned().render(area, buf);
 }

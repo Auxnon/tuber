@@ -279,15 +279,33 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         "▶ playing"
     };
+    Span::styled(state, Style::new().fg(p.success)).render(info, f.buffer_mut());
+    volume(app, info, f.buffer_mut());
+}
+
+/// Right-aligned volume: a pie while it's steady, the full bar and percentage
+/// while it's being changed.
+fn volume(app: &App, area: Rect, buf: &mut Buffer) {
+    let p = &app.palette;
     let vol = (app.player.volume() * 100.0).round() as u32;
-    let vol_bar: String = (0..10).map(|i| if i * 10 < vol { '▮' } else { '▯' }).collect();
-    Line::from(vec![
-        Span::styled(state, Style::new().fg(p.success)),
-        Span::styled("   vol ", Style::new().fg(p.faint)),
-        Span::styled(vol_bar, Style::new().fg(p.secondary)),
-        Span::styled(format!(" {vol}%"), Style::new().fg(p.muted)),
-    ])
-    .render(info, f.buffer_mut());
+    // Past 100% is a boost; colour it so it's noticed.
+    let color = if vol > 100 { p.primary } else { p.secondary };
+    let line = if app.adjusting_volume() {
+        let bar: String = (0..10).map(|i| if i * 10 < vol { '▮' } else { '▯' }).collect();
+        Line::from(vec![
+            Span::styled("vol ", Style::new().fg(p.faint)),
+            Span::styled(bar, Style::new().fg(color)),
+            Span::styled(format!(" {vol:>3}%"), Style::new().fg(p.muted)),
+        ])
+    } else {
+        Line::from(Span::styled(pie(vol).to_string(), Style::new().fg(color)))
+    };
+    line.right_aligned().render(area, buf);
+}
+
+/// Circle filled by quarters; empty only when muted.
+fn pie(vol: u32) -> char {
+    ['○', '◔', '◑', '◕', '●'][vol.div_ceil(25).min(4) as usize]
 }
 
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -411,6 +429,11 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pie_quarters() {
+        assert_eq!([0, 1, 25, 26, 50, 75, 76, 100, 150].map(pie), ['○', '◔', '◔', '◑', '◑', '◕', '●', '●', '●']);
+    }
 
     #[test]
     fn braille_bars() {

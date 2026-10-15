@@ -29,6 +29,8 @@ use yt::Track;
 
 const FRAME: Duration = Duration::from_millis(16);
 const SEEK_STEP: f64 = 5.0;
+/// How long the volume bar stays up after the last change.
+const VOL_HOLD: Duration = Duration::from_secs(2);
 
 enum Msg {
     Search(Result<Vec<Track>>),
@@ -89,6 +91,10 @@ pub struct App {
     /// Restored session track to start paused at this position once its URL resolves.
     resume: Option<(String, f64)>,
     last_save: Instant,
+    /// Volume as of the last frame, to notice changes from keys or MPRIS.
+    vol_seen: f32,
+    /// When the volume last changed; the full bar shows for `VOL_HOLD` after.
+    vol_changed: Option<Instant>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     quit: bool,
@@ -128,6 +134,8 @@ impl App {
             mpris: None,
             resume: None,
             last_save: Instant::now(),
+            vol_seen: f32::NAN,
+            vol_changed: None,
             tx,
             rx,
             quit: false,
@@ -534,12 +542,25 @@ impl App {
         }
     }
 
+    /// Volume changed within the last `VOL_HOLD`.
+    pub fn adjusting_volume(&self) -> bool {
+        self.vol_changed.is_some_and(|t| t.elapsed() < VOL_HOLD)
+    }
+
     fn tick(&mut self, dt: Duration) {
         while let Ok(msg) = self.rx.try_recv() {
             self.handle_msg(msg);
         }
         if self.player.finished() {
             self.next();
+        }
+        let vol = self.player.volume();
+        if vol != self.vol_seen {
+            // The first frame only records the restored volume.
+            if !self.vol_seen.is_nan() {
+                self.vol_changed = Some(Instant::now());
+            }
+            self.vol_seen = vol;
         }
         if let Some(t) = self.now_playing()
             && self.cover_for.as_ref() != Some(&t.id)

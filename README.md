@@ -70,7 +70,7 @@ The cookies are as powerful as your browser's YouTube session, so treat the file
 | `space` | pause |
 | `n` / `p` | next / previous (restarts track if >3s in) |
 | `←`/`→` (`h`/`l`) | focus player, then seek ±5s |
-| `+` / `-` | volume |
+| `+` / `-` | volume (a circle shows the level; the bar and percentage appear while you change it) |
 | `v` | cycle visualizer mode |
 | `L` | load your liked songs into results (signed in) |
 | `c` | continue the song last played on another device (when offered) |

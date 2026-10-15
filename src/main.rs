@@ -31,6 +31,8 @@ const FRAME: Duration = Duration::from_millis(16);
 const SEEK_STEP: f64 = 5.0;
 /// How long the volume bar stays up after the last change.
 const VOL_HOLD: Duration = Duration::from_secs(2);
+/// How long "playing" / "paused" stay spelled out before only the icon is left.
+const STATE_HOLD: Duration = Duration::from_secs(2);
 
 enum Msg {
     Search(Result<Vec<Track>>),
@@ -95,6 +97,9 @@ pub struct App {
     vol_seen: f32,
     /// When the volume last changed; the full bar shows for `VOL_HOLD` after.
     vol_changed: Option<Instant>,
+    /// Playback state word last drawn, and when it changed.
+    state_seen: Option<&'static str>,
+    state_changed: Instant,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     quit: bool,
@@ -136,6 +141,8 @@ impl App {
             last_save: Instant::now(),
             vol_seen: f32::NAN,
             vol_changed: None,
+            state_seen: None,
+            state_changed: Instant::now(),
             tx,
             rx,
             quit: false,
@@ -545,6 +552,16 @@ impl App {
     /// Volume changed within the last `VOL_HOLD`.
     pub fn adjusting_volume(&self) -> bool {
         self.vol_changed.is_some_and(|t| t.elapsed() < VOL_HOLD)
+    }
+
+    /// Whether to spell out the playback state: playing and paused only
+    /// show their word for `STATE_HOLD` after changing to them.
+    pub fn show_state(&mut self, word: &'static str) -> bool {
+        if self.state_seen != Some(word) {
+            self.state_seen = Some(word);
+            self.state_changed = Instant::now();
+        }
+        !matches!(word, "playing" | "paused") || self.state_changed.elapsed() < STATE_HOLD
     }
 
     fn tick(&mut self, dt: Duration) {

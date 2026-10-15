@@ -270,16 +270,17 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
 
     seekbar(app, track.as_ref(), progress, f.buffer_mut());
 
-    let state = if !app.player.is_active() {
-        "■ stopped"
+    let (icon, word) = if !app.player.is_active() {
+        ("■", "stopped")
     } else if app.player.is_paused() {
-        "‖ paused"
+        ("‖", "paused")
     } else if app.player.buffering() {
-        "… buffering"
+        ("…", "buffering")
     } else {
-        "▶ playing"
+        ("▶", "playing")
     };
-    Span::styled(state, Style::new().fg(p.success)).render(info, f.buffer_mut());
+    let state = if app.show_state(word) { format!("{icon} {word}") } else { icon.to_string() };
+    Span::styled(state, Style::new().fg(app.palette.success)).render(info, f.buffer_mut());
     volume(app, info, f.buffer_mut());
 }
 

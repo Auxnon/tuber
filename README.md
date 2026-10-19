@@ -1,17 +1,20 @@
 # tuber
 
-A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It works without an account, and can optionally use yours. It draws a braille audio visualizer and uses [ratatui-cheese](https://crates.io/crates/ratatui-cheese) (Charm-style) widgets and colors.
+A terminal YouTube Music player. Search, play, and let a radio mix keep the music going. It works without an account, and can optionally use yours.
 
 ![tuber with search results, spectrum visualizer and waveform seekbar](docs/screenshot.png)
 
-- **Search** uses YouTube Music's own InnerTube API, filtered to songs. It's anonymous unless you sign in.
-- **Radio**: pressing enter on a song plays it and fills the queue with YouTube Music's auto-generated mix for that song.
-- **Playback**: `yt-dlp` resolves the stream URL, `ffmpeg` decodes it to PCM, and `cpal` plays it.
-- **Waveform seekbar**: shows the shape of the whole track (`▁▂▃▄▅▆▇█`) from a quick second ffmpeg pass. The played part takes a purple→pink gradient and the rest stays faint. The playhead is a full-height block that slides across in 1/8-column steps: a block growing in from the left (`▏▎▍▌▋▊▉█`) with the remainder shrinking out of the column behind it (`🮋🮊🮉▐🮈🮇▕`). It flashes on beats, and on each side the bars thin out toward it through two braille columns at the same height: a full one, then a dithered one (every other dot) right next to the playhead. The shrinking half needs Unicode 13 legacy-computing blocks; kitty, WezTerm, Ghostty, foot and Windows Terminal draw them natively.
-- **MPRIS**: shows up in desktop now-playing widgets (Quickshell, Waybar, GNOME and KDE) with title, artist and cover art, but only once something plays. It disappears again when playback stops. Media keys and `playerctl` can control it.
-- **Resume**: the queue, current track, position, volume and last search are saved locally to `~/.local/state/tuber/session.json`, with no account involved. On the next launch the session comes back paused where you left off; press space to continue.
-- **Cover art**: the track's cover is drawn dimmed behind the visualizer with half blocks (`▀`, two pixels per character in 24-bit color), framed by a grey rounded border like the player panel, with the visualizer drawn on top. Video thumbnails have their letterbox bars trimmed first.
-- **Visualizer** reads the exact samples sent to the speakers and draws them with braille dots on a ratatui `Canvas`. It has three modes: spectrum with peak caps, a mirrored waveform, and a triggered oscilloscope.
+## Features
+
+- **Search** YouTube Music for songs, no account needed.
+- **Radio**: playing a song fills the queue with a mix based on it.
+- **Queue**: add, remove and jump between tracks; next and previous.
+- **Visualizer** over the album art, in three modes: spectrum, mirrored waveform and oscilloscope.
+- **Waveform seekbar** showing the shape of the whole track; seek in 5-second steps.
+- **Resume**: the queue, position, volume and last search are saved locally (`~/.local/state/tuber/`), and the next launch picks up where you left off, paused.
+- **Desktop integration** through MPRIS: shows in now-playing widgets with cover art, and works with media keys and `playerctl`.
+- **Fullscreen** for the list or the player.
+- **Optional sign-in**: liked songs, personalised mixes, plays added to your history, picking up a song from another device, and Premium audio quality. See [Sign in](#sign-in-optional).
 
 <details>
 <summary>Fullscreen player, mirror visualizer</summary>
@@ -20,16 +23,33 @@ A terminal YouTube Music player built with [ratatui](https://ratatui.rs). It wor
 
 </details>
 
-## Requirements
+## Prerequisites
 
-`yt-dlp` and `ffmpeg` on your `PATH`, plus ALSA headers to build (`alsa-lib-devel` / `libasound2-dev`).
-yt-dlp also needs a JavaScript runtime for YouTube's challenges; tuber lets it use deno, node, bun or quickjs, whichever is installed. Keep yt-dlp up to date. When YouTube changes how stream URLs are signed, updating yt-dlp is usually the fix.
+To run:
+
+- [**yt-dlp**](https://github.com/yt-dlp/yt-dlp), kept up to date. When YouTube changes something, updating yt-dlp is usually the fix, and distro packages can lag behind; `pipx install yt-dlp` or the standalone release stays current.
+- **ffmpeg**.
+- **A JavaScript runtime** for yt-dlp to solve YouTube's challenges: deno, node, bun or quickjs, whichever you have.
+- A terminal with 24-bit color. Fonts with Unicode 13 block characters draw the seekbar's playhead best; kitty, WezTerm, Ghostty, foot and Windows Terminal draw them without one.
+
+To build:
+
+- **Rust 1.88** or newer (via [rustup](https://rustup.rs)).
+- **ALSA headers** and `pkg-config`: `alsa-lib-devel pkgconf-pkg-config` on Fedora, `libasound2-dev pkg-config` on Debian and Ubuntu.
+
+Only for signing in with a Chrome-family browser on GNOME: the Python **secretstorage** module (`python3-secretstorage`), which yt-dlp needs to read the cookie key from the keyring.
+
+## Install
+
+```sh
+cargo install --git https://github.com/Auxnon/tuber
+```
 
 ## Run
 
 ```sh
-cargo run --release                       # start at the search box
-cargo run --release -- daft punk          # search straight away
+tuber                # start at the search box
+tuber daft punk      # search straight away
 ```
 
 ## Sign in (optional)
@@ -51,7 +71,7 @@ Sign in to [music.youtube.com](https://music.youtube.com) in your browser first.
 - radio mixes and search are personalised to your account,
 - yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
 
-The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. Chrome-family browsers keep the cookie key in your keyring, and yt-dlp reads GNOME Keyring through the Python `secretstorage` module (`python3-secretstorage` on Fedora and Debian), which some distro packages leave out; `--login` tells you if it's missing. The keyring may ask for permission the first time. Google no longer lets third-party apps use its device-code sign-in for YouTube Music, so borrowing the browser's session is the way that still works.
+The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. With Chrome-family browsers the keyring may ask for permission the first time, and `--login` tells you if `secretstorage` is missing.
 
 ## Keys
 
@@ -70,7 +90,7 @@ The cookies are as powerful as your browser's YouTube session, so treat the file
 | `space` | pause |
 | `n` / `p` | next / previous (restarts track if >3s in) |
 | `←`/`→` (`h`/`l`) | focus player, then seek ±5s |
-| `+` / `-` | volume (a circle and number show the level; the bar appears while you change it) |
+| `+` / `-` | volume |
 | `v` | cycle visualizer mode |
 | `L` | load your liked songs into results (signed in) |
 | `c` | continue the song last played on another device (when offered) |

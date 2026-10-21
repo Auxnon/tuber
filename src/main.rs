@@ -25,7 +25,7 @@ use mpris::Mpris;
 use souvlaki::{MediaControlEvent, SeekDirection};
 use player::Player;
 use viz::Visualizer;
-use yt::Track;
+use yt::{Rating, Track};
 
 const FRAME: Duration = Duration::from_millis(16);
 const SEEK_STEP: f64 = 5.0;
@@ -43,6 +43,9 @@ enum Msg {
     Liked(Result<Vec<Track>>),
     History(Result<Vec<Track>>),
     Cover { id: String, res: Result<image::RgbImage> },
+    Rating { id: String, res: Result<Rating> },
+    /// A rating change went through, or failed and `prev` should come back.
+    Rated { id: String, prev: Option<Rating>, res: Result<()> },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +86,12 @@ pub struct App {
     cover_for: Option<String>,
     /// Last song played on another device, offered at launch (`c`).
     pub offer: Option<Track>,
+    /// The account's ratings of tracks seen so far, by video id.
+    pub ratings: HashMap<String, Rating>,
+    /// Track whose rating was last requested, so each is fetched once.
+    rating_for: Option<String>,
+    /// Show the key bindings (`?`).
+    pub show_help: bool,
     /// Track to add to the account's history once it has really played.
     report: Option<String>,
     pub spinner: SpinnerState,
@@ -132,6 +141,9 @@ impl App {
             cover: None,
             cover_for: None,
             report: None,
+            ratings: HashMap::new(),
+            rating_for: None,
+            show_help: false,
             spinner: SpinnerState::new(SpinnerType::Dot),
             urls: HashMap::new(),
             resolving: HashSet::new(),
@@ -178,6 +190,28 @@ impl App {
         self.busy += 1;
         self.status = "loading liked songs".into();
         self.spawn(|| Msg::Liked(yt::liked()));
+    }
+
+    /// Toggle a like or dislike on the playing track. Disliking also skips
+    /// it, as the official apps do.
+    fn rate(&mut self, rating: Rating) {
+        if !yt::signed_in() {
+            self.status = "likes need a sign-in: run `tuber --login`".into();
+            return;
+        }
+        let Some((id, title)) = self.now_playing().map(|t| (t.id.clone(), t.title.clone())) else { return };
+        let prev = self.ratings.get(&id).copied();
+        let new = if prev == Some(rating) { Rating::Neutral } else { rating };
+        self.ratings.insert(id.clone(), new);
+        self.status = match new {
+            Rating::Like => format!("liked “{title}”"),
+            Rating::Dislike => format!("disliked “{title}”"),
+            Rating::Neutral => format!("cleared rating of “{title}”"),
+        };
+        self.spawn(move || Msg::Rated { res: yt::rate(&id, new), id, prev });
+        if new == Rating::Dislike {
+            self.next();
+        }
     }
 
     fn resolve(&mut self, id: &str) {
@@ -390,6 +424,21 @@ impl App {
                     self.cover = Some((id, img));
                 }
             }
+            Msg::Rating { id, res } => {
+                // A rating set meanwhile with `l`/`L` wins over the fetched one.
+                if let Ok(r) = res {
+                    self.ratings.entry(id).or_insert(r);
+                }
+            }
+            Msg::Rated { id, prev, res } => {
+                if let Err(e) = res {
+                    match prev {
+                        Some(r) => self.ratings.insert(id, r),
+                        None => self.ratings.remove(&id),
+                    };
+                    self.status = format!("rating failed: {e:#}");
+                }
+            }
             Msg::History(res) => match res {
                 Ok(history) => self.offer_from(history),
                 Err(e) => self.status = format!("history failed: {e:#}"),
@@ -494,7 +543,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') if !on_list => {
                 self.focus = Focus::List;
             }
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') if on_list => {
+            KeyCode::Left | KeyCode::Right if on_list => {
                 self.focus = Focus::Player;
             }
             KeyCode::Down | KeyCode::Char('j') => state.select_next(list_len, false),
@@ -533,12 +582,15 @@ impl App {
             KeyCode::Char(' ') => self.player.toggle_pause(),
             KeyCode::Char('n') => self.next(),
             KeyCode::Char('p') => self.prev(),
-            KeyCode::Right | KeyCode::Char('l') => self.player.seek_to(self.player.position() + SEEK_STEP),
-            KeyCode::Left | KeyCode::Char('h') => self.player.seek_to(self.player.position() - SEEK_STEP),
+            KeyCode::Right => self.player.seek_to(self.player.position() + SEEK_STEP),
+            KeyCode::Left => self.player.seek_to(self.player.position() - SEEK_STEP),
             KeyCode::Char('+') | KeyCode::Char('=') => self.player.set_volume(self.player.volume() + 0.05),
             KeyCode::Char('-') => self.player.set_volume(self.player.volume() - 0.05),
             KeyCode::Char('v') => self.viz.mode = self.viz.mode.next(),
-            KeyCode::Char('L') => self.liked(),
+            KeyCode::Char('l') => self.rate(Rating::Like),
+            KeyCode::Char('L') => self.rate(Rating::Dislike),
+            KeyCode::Char('F') => self.liked(),
+            KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('c') => {
                 if let Some(t) = self.offer.take() {
                     self.start_radio(t);
@@ -587,6 +639,14 @@ impl App {
             if let Some(url) = art {
                 self.spawn(move || Msg::Cover { res: art::fetch(&url), id });
             }
+        }
+        if yt::signed_in()
+            && let Some(t) = self.now_playing()
+            && self.rating_for.as_ref() != Some(&t.id)
+        {
+            let id = t.id.clone();
+            self.rating_for = Some(id.clone());
+            self.spawn(move || Msg::Rating { res: yt::rating(&id), id });
         }
         // Report a play after 10s, so skipped tracks don't land in history.
         let p = &self.player;
@@ -660,7 +720,7 @@ fn main() -> Result<()> {
     });
     if let Some(a) = auth::Auth::load() {
         yt::sign_in(a);
-        app.status = "signed in — type to search, L for liked songs".into();
+        app.status = "signed in — type to search, F for liked songs".into();
         app.spawn(|| Msg::Account(yt::account_name()));
         app.spawn(|| Msg::History(yt::history()));
     }

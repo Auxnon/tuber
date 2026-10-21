@@ -14,7 +14,7 @@ A terminal YouTube Music player. Search, play, and let a radio mix keep the musi
 - **Resume**: the queue, position, volume and last search are saved locally (`~/.local/state/tuber/`), and the next launch picks up where you left off, paused.
 - **Desktop integration** through MPRIS: shows in now-playing widgets with cover art, and works with media keys and `playerctl`.
 - **Fullscreen** for the list or the player.
-- **Optional sign-in**: liked songs, personalised mixes, plays added to your history, picking up a song from another device, and Premium audio quality. See [Sign in](#sign-in-optional).
+- **Optional sign-in**: like and dislike songs, your liked songs, personalised mixes, plays added to your history, picking up a song from another device, and Premium audio quality. See [Sign in](#sign-in-optional).
 
 <details>
 <summary>Fullscreen player, mirror visualizer</summary>
@@ -67,7 +67,8 @@ Sign in to [music.youtube.com](https://music.youtube.com) in your browser first.
 - the header shows your account name,
 - songs tuber plays for at least 10 seconds go into your YouTube Music history, like plays from the official apps,
 - at launch, if your history's newest song was played on another device after tuber's last session, tuber offers it: press `c` to play it with a radio mix (from the start; YouTube doesn't sync the position within songs),
-- `L` loads your liked songs,
+- `l` likes the playing song and `L` dislikes it and skips ahead (press again to undo); the player shows ♥ for liked songs,
+- `F` loads your liked songs,
 - radio mixes and search are personalised to your account,
 - yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
 
@@ -89,11 +90,13 @@ The cookies are as powerful as your browser's YouTube session, so treat the file
 | `J`/`K`, `g`/`G` | page, top/bottom |
 | `space` | pause |
 | `n` / `p` | next / previous (restarts track if >3s in) |
-| `←`/`→` (`h`/`l`) | focus player, then seek ±5s |
+| `←`/`→` | focus player, then seek ±5s |
 | `+` / `-` | volume |
 | `v` | cycle visualizer mode |
-| `L` | load your liked songs into results (signed in) |
+| `l` / `L` | like / dislike and skip the playing song (signed in) |
+| `F` | load your liked songs into results (signed in) |
 | `c` | continue the song last played on another device (when offered) |
+| `?` | show or hide the key list |
 | `q` | quit |
 
 Picking a song from the list moves focus to the player, and in fullscreen that switches the view to the player.

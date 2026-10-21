@@ -182,6 +182,41 @@ pub fn radio(video_id: &str) -> Result<Vec<Track>> {
     Ok(tracks)
 }
 
+/// How the signed-in account rated a track.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Rating {
+    Like,
+    Dislike,
+    Neutral,
+}
+
+/// The account's current rating of a track.
+pub fn rating(video_id: &str) -> Result<Rating> {
+    let resp = post_signed("next", json!({ "videoId": video_id, "isAudioOnly": true }))?;
+    let mut buttons = Vec::new();
+    find(&resp, "likeButtonRenderer", &mut buttons);
+    let button = buttons
+        .into_iter()
+        .find(|b| b["target"]["videoId"].as_str() == Some(video_id))
+        .context("no like button for this track")?;
+    Ok(match button["likeStatus"].as_str() {
+        Some("LIKE") => Rating::Like,
+        Some("DISLIKE") => Rating::Dislike,
+        _ => Rating::Neutral,
+    })
+}
+
+/// Like, dislike or clear the rating of a track, as the thumbs in the apps do.
+pub fn rate(video_id: &str, rating: Rating) -> Result<()> {
+    let endpoint = match rating {
+        Rating::Like => "like/like",
+        Rating::Dislike => "like/dislike",
+        Rating::Neutral => "like/removelike",
+    };
+    post_signed(endpoint, json!({ "target": { "videoId": video_id } }))?;
+    Ok(())
+}
+
 /// Every value under `key`, anywhere in `v`. Browse responses nest their
 /// lists differently per page type, so search instead of hard-coding paths.
 fn find<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {

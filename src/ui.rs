@@ -11,7 +11,7 @@ use ratatui_cheese::spinner::Spinner;
 
 use crate::art;
 use crate::viz::{VizWidget, lerp};
-use crate::yt::Track;
+use crate::yt::{Rating, Track};
 use crate::{App, Focus, Tab};
 
 /// Two-line track row in the Bubbles list style: a coloured bar marks the selection.
@@ -75,7 +75,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(if show_list { 1 } else { 0 }),
         Constraint::Fill(1),
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(help_widget(app).required_height()),
     ])
     .areas(area);
 
@@ -116,40 +116,49 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_player(f, app, body);
     }
 
-    let bindings = if app.input.focused() {
-        vec![Binding::new("enter", "search"), Binding::new("esc", "cancel")]
-    } else {
-        let mut b = vec![Binding::new("/", "search")];
-        if app.offer.is_some() {
-            b.insert(0, Binding::new("c", "continue from other device"));
-        }
-        if show_list {
-            b.push(Binding::new("enter", if app.tab == Tab::Results { "play + radio" } else { "play" }));
-            if app.tab == Tab::Results {
-                b.push(Binding::new("a", "enqueue"));
-            } else {
-                b.push(Binding::new("d", "remove"));
-            }
-        }
-        if app.fullscreen {
-            b.push(Binding::new("f/esc", "exit fullscreen"));
-        } else {
-            b.push(Binding::new("f", "fullscreen"));
-        }
-        b.extend([
-            Binding::new("space", "pause"),
-            Binding::new("n/p", "next/prev"),
-            if app.focus == Focus::List { Binding::new("←/→", "player") } else { Binding::new("←/→", "seek") },
-            if app.focus == Focus::List { Binding::new("↑/↓", "move") } else { Binding::new("↑/↓", "list") },
-            Binding::new("+/-", "volume"),
-            Binding::new("v", "visualizer"),
-            Binding::new("tab", "results/queue"),
-            Binding::new("L", "liked songs"),
-            Binding::new("q", "quit"),
-        ]);
-        b
-    };
-    Help::default().bindings(bindings).styles(HelpStyles::from_palette(&p)).render(help, f.buffer_mut());
+    help_widget(app).styles(HelpStyles::from_palette(&p)).render(help, f.buffer_mut());
+}
+
+/// The bottom bar: a hint for `?`, or with `?` the full key list in columns.
+fn help_widget(app: &App) -> Help {
+    if app.input.focused() {
+        return Help::default().bindings(vec![Binding::new("enter", "search"), Binding::new("esc", "cancel")]);
+    }
+    let mut short = vec![Binding::new("?", "controls")];
+    if app.offer.is_some() {
+        short.insert(0, Binding::new("c", "continue from other device"));
+    }
+    if !app.show_help {
+        return Help::default().bindings(short);
+    }
+    let list = vec![
+        Binding::new("/", "search"),
+        Binding::new("enter", "play"),
+        Binding::new("a", "enqueue"),
+        Binding::new("r", "radio"),
+        Binding::new("d", "remove from queue"),
+        Binding::new("tab", "results/queue"),
+        Binding::new("↑/↓", "move"),
+    ];
+    let playback = vec![
+        Binding::new("space", "pause"),
+        Binding::new("n/p", "next/prev"),
+        Binding::new("←/→", "seek"),
+        Binding::new("+/-", "volume"),
+        Binding::new("v", "visualizer"),
+        Binding::new("f", "fullscreen"),
+    ];
+    let mut more = vec![
+        Binding::new("l", "like").enabled(app.account.is_some()),
+        Binding::new("L", "dislike + skip").enabled(app.account.is_some()),
+        Binding::new("F", "liked songs").enabled(app.account.is_some()),
+        Binding::new("?", "hide"),
+        Binding::new("q", "quit"),
+    ];
+    if app.offer.is_some() {
+        more.insert(0, Binding::new("c", "continue"));
+    }
+    Help::default().bindings(short).binding_groups(vec![list, playback, more]).show_all(true)
 }
 
 fn draw_lists(f: &mut Frame, app: &mut App, area: Rect) {
@@ -228,7 +237,19 @@ fn draw_player(f: &mut Frame, app: &mut App, area: Rect) {
     let track = app.now_playing().cloned();
     match &track {
         Some(t) => {
+            // The account's rating at the right: ♥ liked, ♡ not rated, ⊘ disliked.
+            let mark = match app.ratings.get(&t.id) {
+                Some(Rating::Like) => Some(("♥", p.primary)),
+                Some(Rating::Neutral) => Some(("♡", p.faint)),
+                Some(Rating::Dislike) => Some(("⊘", p.muted)),
+                None => None,
+            };
+            let [title, heart] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(if mark.is_some() { 2 } else { 0 })])
+                .areas(title);
             Paragraph::new(t.title.as_str()).style(Style::new().fg(p.foreground).bold()).render(title, f.buffer_mut());
+            if let Some((c, color)) = mark {
+                Line::from(Span::styled(c, Style::new().fg(color))).right_aligned().render(heart, f.buffer_mut());
+            }
             let m = if t.album.is_empty() { t.artist.clone() } else { format!("{} · {}", t.artist, t.album) };
             Paragraph::new(m).fg(p.secondary).render(meta, f.buffer_mut());
         }

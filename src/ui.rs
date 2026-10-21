@@ -152,6 +152,7 @@ fn help_widget(app: &App) -> Help {
         Binding::new("l", "like").enabled(app.account.is_some()),
         Binding::new("L", "dislike + skip").enabled(app.account.is_some()),
         Binding::new("F", "liked songs").enabled(app.account.is_some()),
+        Binding::new("h", "history"),
         Binding::new("?", "hide"),
         Binding::new("q", "quit"),
     ];

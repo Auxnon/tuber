@@ -29,6 +29,8 @@ use yt::{Rating, Track};
 
 const FRAME: Duration = Duration::from_millis(16);
 const SEEK_STEP: f64 = 5.0;
+/// Local history length.
+const PLAYED_MAX: usize = 200;
 /// How long the volume bar stays up after the last change.
 const VOL_HOLD: Duration = Duration::from_secs(2);
 /// How long "playing" / "paused" stay spelled out before only the icon is left.
@@ -42,6 +44,8 @@ enum Msg {
     Account(Result<String>),
     Liked(Result<Vec<Track>>),
     History(Result<Vec<Track>>),
+    /// History for `h`, as opposed to the launch-time check in `History`.
+    Recent(Result<Vec<Track>>),
     Cover { id: String, res: Result<image::RgbImage> },
     Rating { id: String, res: Result<Rating> },
     /// A rating change went through, or failed and `prev` should come back.
@@ -92,8 +96,10 @@ pub struct App {
     rating_for: Option<String>,
     /// Show the key bindings (`?`).
     pub show_help: bool,
-    /// Track to add to the account's history once it has really played.
+    /// Track to add to history once it has really played.
     report: Option<String>,
+    /// Tracks played here, newest first, for `h` when not signed in.
+    played: Vec<Track>,
     pub spinner: SpinnerState,
     urls: HashMap<String, String>,
     resolving: HashSet<String>,
@@ -141,6 +147,7 @@ impl App {
             cover: None,
             cover_for: None,
             report: None,
+            played: Vec::new(),
             ratings: HashMap::new(),
             rating_for: None,
             show_help: false,
@@ -214,6 +221,31 @@ impl App {
         }
     }
 
+    /// Recently played: the account's history (every device) when signed in,
+    /// otherwise what was played here.
+    fn recent(&mut self) {
+        if yt::signed_in() {
+            self.busy += 1;
+            self.status = "loading history".into();
+            self.spawn(|| Msg::Recent(yt::history()));
+        } else {
+            self.show_results("↺ recently played", self.played.clone());
+        }
+    }
+
+    /// Put a list (liked songs, history) where search results go.
+    fn show_results(&mut self, label: &str, tracks: Vec<Track>) {
+        self.status = match tracks.len() {
+            1 => "1 song".into(),
+            n => format!("{n} songs"),
+        };
+        self.input.set_value(label.into());
+        self.results_state = ListState::new(tracks.len());
+        self.results = tracks;
+        self.tab = Tab::Results;
+        self.focus = Focus::List;
+    }
+
     fn resolve(&mut self, id: &str) {
         if self.urls.contains_key(id) || !self.resolving.insert(id.to_string()) {
             return;
@@ -250,7 +282,7 @@ impl App {
 
     fn start(&mut self, id: &str, url: String) {
         envelope::analyse(&self.envelope, id, &url);
-        self.report = yt::signed_in().then(|| id.to_string());
+        self.report = Some(id.to_string());
         match self.resume.take() {
             Some((resume_id, at)) if resume_id == id => {
                 self.player.play(url, at);
@@ -262,6 +294,7 @@ impl App {
 
     fn restore(&mut self, s: session::Session, keep_search: bool) {
         self.player.set_volume(s.volume);
+        self.played = s.played;
         if keep_search {
             self.input.set_value(s.query);
             self.results_state = ListState::new(s.results.len());
@@ -297,6 +330,7 @@ impl App {
             current: self.current,
             position,
             volume: self.player.volume(),
+            played: self.played.clone(),
         }
     }
 
@@ -381,7 +415,10 @@ impl App {
                 self.busy -= 1;
                 match res {
                     Ok(tracks) => {
-                        self.status = format!("{} songs", tracks.len());
+                        self.status = match tracks.len() {
+            1 => "1 song".into(),
+            n => format!("{n} songs"),
+        };
                         self.results_state = ListState::new(tracks.len());
                         self.results = tracks;
                         self.tab = Tab::Results;
@@ -408,14 +445,7 @@ impl App {
             Msg::Liked(res) => {
                 self.busy -= 1;
                 match res {
-                    Ok(tracks) => {
-                        self.status = format!("{} liked songs", tracks.len());
-                        self.input.set_value("♥ liked songs".into());
-                        self.results_state = ListState::new(tracks.len());
-                        self.results = tracks;
-                        self.tab = Tab::Results;
-                        self.focus = Focus::List;
-                    }
+                    Ok(tracks) => self.show_results("♥ liked songs", tracks),
                     Err(e) => self.status = format!("liked songs failed: {e:#}"),
                 }
             }
@@ -437,6 +467,16 @@ impl App {
                         None => self.ratings.remove(&id),
                     };
                     self.status = format!("rating failed: {e:#}");
+                }
+            }
+            Msg::Recent(res) => {
+                self.busy -= 1;
+                match res {
+                    Ok(tracks) => self.show_results("↺ recently played", tracks),
+                    Err(e) => {
+                        self.show_results("↺ recently played here", self.played.clone());
+                        self.status = format!("account history failed, showing this computer's: {e:#}");
+                    }
                 }
             }
             Msg::History(res) => match res {
@@ -590,6 +630,7 @@ impl App {
             KeyCode::Char('l') => self.rate(Rating::Like),
             KeyCode::Char('L') => self.rate(Rating::Dislike),
             KeyCode::Char('F') => self.liked(),
+            KeyCode::Char('h') => self.recent(),
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('c') => {
                 if let Some(t) = self.offer.take() {
@@ -652,7 +693,14 @@ impl App {
         let p = &self.player;
         if self.report.is_some() && p.is_active() && !p.is_paused() && p.position() >= 10.0 {
             let id = self.report.take().unwrap();
-            thread::spawn(move || yt::report_play(&id));
+            if let Some(t) = self.now_playing().filter(|t| t.id == id).cloned() {
+                self.played.retain(|p| p.id != id);
+                self.played.insert(0, t);
+                self.played.truncate(PLAYED_MAX);
+            }
+            if yt::signed_in() {
+                thread::spawn(move || yt::report_play(&id));
+            }
         }
         self.spinner.tick(dt);
         if self.last_save.elapsed() >= Duration::from_secs(5) {

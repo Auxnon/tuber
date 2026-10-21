@@ -1,5 +1,5 @@
-//! Local session persistence: queue, current track, position, volume and last
-//! search. Lives in `$XDG_STATE_HOME/tuber/session.json` (default
+//! Local session persistence: queue, current track, position, volume, last
+//! search and play history. Lives in `$XDG_STATE_HOME/tuber/session.json` (default
 //! `~/.local/state/tuber/`) and needs no account.
 
 use anyhow::{Context, Result};
@@ -18,6 +18,9 @@ pub struct Session {
     /// Seconds into the current track.
     pub position: f64,
     pub volume: f32,
+    /// Tracks played for at least 10 seconds, newest first.
+    #[serde(default)]
+    pub played: Vec<Track>,
 }
 
 /// `$XDG_STATE_HOME/tuber`, default `~/.local/state/tuber`.

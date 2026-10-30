@@ -12,7 +12,7 @@ A terminal YouTube Music player. Search, play, and let a radio mix keep the musi
 - **Visualizer** over the album art, in three modes: spectrum, mirrored waveform and oscilloscope.
 - **Waveform seekbar** showing the shape of the whole track; seek in 5-second steps.
 - **History**: `h` lists what you played recently.
-- **Resume**: the queue, position, volume and last search are saved locally (`~/.local/state/tuber/`), and the next launch picks up where you left off, paused.
+- **Resume**: the queue, position, volume and last search are saved locally (`~/.local/state/tuber/`), and the next launch asks whether to pick up where you left off. Nothing loads until you answer.
 - **Desktop integration** through MPRIS: shows in now-playing widgets with cover art, and works with media keys and `playerctl`.
 - **Fullscreen** for the list or the player.
 - **Optional sign-in**: like and dislike songs, your liked songs, personalised mixes, plays added to your history, picking up a song from another device, and Premium audio quality. See [Sign in](#sign-in-optional).
@@ -67,7 +67,7 @@ Sign in to [music.youtube.com](https://music.youtube.com) in your browser first.
 
 - the header shows your account name,
 - songs tuber plays for at least 10 seconds go into your YouTube Music history, like plays from the official apps,
-- at launch, if your history's newest song was played on another device after tuber's last session, tuber offers it: press `c` to play it with a radio mix (from the start; YouTube doesn't sync the position within songs),
+- at launch, if your history's newest song was played on another device after tuber's last session, tuber asks whether to continue with it, as a radio mix (from the start; YouTube doesn't sync the position within songs); say no and it offers this computer's session instead,
 - `l` likes the playing song and `L` dislikes it and skips ahead (press again to undo); the player shows ♥ for liked songs,
 - `F` loads your liked songs,
 - `h` shows your account's history, including plays on other devices,
@@ -98,7 +98,6 @@ The cookies are as powerful as your browser's YouTube session, so treat the file
 | `l` / `L` | like / dislike and skip the playing song (signed in) |
 | `F` | load your liked songs into results (signed in) |
 | `h` | recently played: your account's history when signed in, otherwise this computer's |
-| `c` | continue the song last played on another device (when offered) |
 | `?` | show or hide the key list |
 | `q` | quit |
 

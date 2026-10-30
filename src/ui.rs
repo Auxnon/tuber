@@ -3,16 +3,17 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
 use ratatui_cheese::help::{Binding, Help, HelpStyles};
 use ratatui_cheese::input::Input;
 use ratatui_cheese::list::{List, ListItem, ListItemContext};
 use ratatui_cheese::spinner::Spinner;
+use ratatui_cheese::theme::Palette;
 
 use crate::art;
 use crate::viz::{VizWidget, lerp};
 use crate::yt::{Rating, Track};
-use crate::{App, Focus, Tab};
+use crate::{App, Ask, Focus, Tab};
 
 /// Two-line track row in the Bubbles list style: a coloured bar marks the selection.
 struct Row<'a> {
@@ -117,6 +118,59 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     help_widget(app).styles(HelpStyles::from_palette(&p)).render(help, f.buffer_mut());
+
+    if let Some(ask) = &app.ask {
+        draw_ask(f, &p, ask);
+    }
+}
+
+/// The launch question, centred over everything.
+fn draw_ask(f: &mut Frame, p: &Palette, ask: &Ask) {
+    let key = |k: &'static str, d: &'static str| {
+        [Span::styled(k, Style::new().fg(p.foreground).bold()), Span::styled(d, Style::new().fg(p.muted))]
+    };
+    let answer = Line::from_iter(key("y", " yes     ").into_iter().chain(key("n", " no")));
+    let (question, lines) = match ask {
+        Ask::Checking(_) => (
+            "Welcome back",
+            vec![Line::styled("checking your other devices…", Style::new().fg(p.muted)), Line::default(), Line::from_iter(key("n", " skip"))],
+        ),
+        Ask::Resume(t, at) => (
+            "Pick up where you left off?",
+            vec![
+                Line::styled(t.title.as_str(), Style::new().fg(p.foreground).bold()),
+                Line::styled(format!("{} · at {}", t.artist, fmt_time(*at as u64)), Style::new().fg(p.secondary)),
+                Line::default(),
+                answer,
+            ],
+        ),
+        Ask::Remote(t) => (
+            "Continue from your other device?",
+            vec![
+                Line::styled(t.title.as_str(), Style::new().fg(p.foreground).bold()),
+                Line::styled(format!("{} · plays with a radio mix", t.artist), Style::new().fg(p.secondary)),
+                Line::default(),
+                answer,
+            ],
+        ),
+    };
+    let width = lines.iter().map(Line::width).chain([question.chars().count()]).max().unwrap_or(0) as u16 + 8;
+    let height = lines.len() as u16 + 4;
+    let screen = f.area();
+    let area = Rect {
+        x: screen.x + screen.width.saturating_sub(width) / 2,
+        y: screen.y + screen.height.saturating_sub(height) / 2,
+        width: width.min(screen.width),
+        height: height.min(screen.height),
+    };
+    Clear.render(area, f.buffer_mut());
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(p.primary))
+        .title(Line::from(Span::styled(format!(" {question} "), Style::new().fg(p.primary))).centered());
+    let inner = block.inner(area).inner(Margin::new(3, 1));
+    block.render(area, f.buffer_mut());
+    Paragraph::new(lines).centered().render(inner, f.buffer_mut());
 }
 
 /// The bottom bar: a hint for `?`, or with `?` the full key list in columns.
@@ -124,10 +178,7 @@ fn help_widget(app: &App) -> Help {
     if app.input.focused() {
         return Help::default().bindings(vec![Binding::new("enter", "search"), Binding::new("esc", "cancel")]);
     }
-    let mut short = vec![Binding::new("?", "controls")];
-    if app.offer.is_some() {
-        short.insert(0, Binding::new("c", "continue from other device"));
-    }
+    let short = vec![Binding::new("?", "controls")];
     if !app.show_help {
         return Help::default().bindings(short);
     }
@@ -148,7 +199,7 @@ fn help_widget(app: &App) -> Help {
         Binding::new("v", "visualizer"),
         Binding::new("f", "fullscreen"),
     ];
-    let mut more = vec![
+    let more = vec![
         Binding::new("l", "like").enabled(app.account.is_some()),
         Binding::new("L", "dislike + skip").enabled(app.account.is_some()),
         Binding::new("F", "liked songs").enabled(app.account.is_some()),
@@ -156,9 +207,6 @@ fn help_widget(app: &App) -> Help {
         Binding::new("?", "hide"),
         Binding::new("q", "quit"),
     ];
-    if app.offer.is_some() {
-        more.insert(0, Binding::new("c", "continue"));
-    }
     Help::default().bindings(short).binding_groups(vec![list, playback, more]).show_all(true)
 }
 

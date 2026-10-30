@@ -31,6 +31,8 @@ const FRAME: Duration = Duration::from_millis(16);
 const SEEK_STEP: f64 = 5.0;
 /// Local history length.
 const PLAYED_MAX: usize = 200;
+/// How long the launch question waits for the account's history.
+const ASK_WAIT: Duration = Duration::from_secs(8);
 /// How long the volume bar stays up after the last change.
 const VOL_HOLD: Duration = Duration::from_secs(2);
 /// How long "playing" / "paused" stay spelled out before only the icon is left.
@@ -50,6 +52,17 @@ enum Msg {
     Rating { id: String, res: Result<Rating> },
     /// A rating change went through, or failed and `prev` should come back.
     Rated { id: String, prev: Option<Rating>, res: Result<()> },
+}
+
+/// The launch question: pick up where you left off? Nothing is buffered
+/// until it's answered.
+pub enum Ask {
+    /// Signed in: finding out whether another device played something since.
+    Checking(Instant),
+    /// This computer's last session: the track and position.
+    Resume(Track, f64),
+    /// What another device played last.
+    Remote(Track),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,8 +101,8 @@ pub struct App {
     pub cover: Option<(String, image::RgbImage)>,
     /// Track whose cover was last requested, so each is fetched once.
     cover_for: Option<String>,
-    /// Last song played on another device, offered at launch (`c`).
-    pub offer: Option<Track>,
+    /// The launch question, while it's open.
+    pub ask: Option<Ask>,
     /// The account's ratings of tracks seen so far, by video id.
     pub ratings: HashMap<String, Rating>,
     /// Track whose rating was last requested, so each is fetched once.
@@ -143,7 +156,7 @@ impl App {
             status: "no sign-in needed — type to search".into(),
             busy: 0,
             account: None,
-            offer: None,
+            ask: None,
             cover: None,
             cover_for: None,
             report: None,
@@ -261,7 +274,6 @@ impl App {
         }
         self.current = Some(i);
         self.queue_state.select(i, self.queue.len());
-        self.offer = None;
         self.status = format!("{} — {}", track.title, track.artist);
         match self.urls.get(&track.id) {
             Some(url) => {
@@ -284,10 +296,7 @@ impl App {
         envelope::analyse(&self.envelope, id, &url);
         self.report = Some(id.to_string());
         match self.resume.take() {
-            Some((resume_id, at)) if resume_id == id => {
-                self.player.play(url, at);
-                self.player.set_paused(true);
-            }
+            Some((resume_id, at)) if resume_id == id => self.player.play(url, at),
             _ => self.player.play(url, 0.0),
         }
     }
@@ -307,9 +316,6 @@ impl App {
             self.current = Some(i);
             self.queue_state.select(i, self.queue.len());
             self.resume = Some((track.id.clone(), s.position));
-            self.pending = Some(track.id.clone());
-            self.resolve(&track.id);
-            self.status = format!("resumed {} — space to play", track.title);
             self.input.set_focused(false);
             self.focus = Focus::Player;
         } else if !self.results.is_empty() {
@@ -334,18 +340,44 @@ impl App {
         }
     }
 
-    /// Offer the account's most recent play if it happened somewhere else
-    /// after tuber's session: tuber reports its own plays, so if the newest
-    /// history entry isn't anything this session played, it's from another
-    /// device (or the browser).
-    fn offer_from(&mut self, history: Vec<Track>) {
-        let Some(last) = history.into_iter().next() else { return };
+    /// The account's most recent play, if it happened somewhere else after
+    /// tuber's session: tuber reports its own plays, so if the newest history
+    /// entry isn't anything this session played, it's from another device
+    /// (or the browser).
+    fn played_elsewhere(&self, history: Vec<Track>) -> Option<Track> {
+        let last = history.into_iter().next()?;
         let played_here = self.current.and_then(|c| self.queue.get(..=c)).unwrap_or_default();
-        if played_here.iter().any(|t| t.id == last.id) {
-            return;
+        (!played_here.iter().any(|t| t.id == last.id)).then_some(last)
+    }
+
+    /// The question about this computer's last session, if there is one.
+    fn ask_local(&self) -> Option<Ask> {
+        let (id, at) = self.resume.as_ref()?;
+        let track = self.now_playing().filter(|t| t.id == *id)?;
+        Some(Ask::Resume(track.clone(), *at))
+    }
+
+    fn answer(&mut self, yes: bool) {
+        match self.ask.take() {
+            Some(Ask::Remote(t)) if yes => {
+                self.start_radio(t);
+                self.focus = Focus::Player;
+            }
+            // Not that one; maybe this computer's session instead.
+            Some(Ask::Remote(_)) => self.ask = self.ask_local(),
+            Some(Ask::Resume(..)) if yes => {
+                if let Some(i) = self.current {
+                    self.play_index(i);
+                }
+                self.focus = Focus::Player;
+            }
+            Some(Ask::Resume(..) | Ask::Checking(_)) => {
+                self.resume = None;
+                self.current = None;
+                self.status = "type to search".into();
+            }
+            None => {}
         }
-        self.status = format!("last played elsewhere: {} — {} · c to continue", last.title, last.artist);
-        self.offer = Some(last);
     }
 
     /// Replace the queue with this track followed by its YouTube Music radio.
@@ -479,10 +511,18 @@ impl App {
                     }
                 }
             }
-            Msg::History(res) => match res {
-                Ok(history) => self.offer_from(history),
-                Err(e) => self.status = format!("history failed: {e:#}"),
-            },
+            Msg::History(res) => {
+                // Only matters while the launch question is waiting on it.
+                if matches!(self.ask, Some(Ask::Checking(_))) {
+                    self.ask = match res {
+                        Ok(history) => self.played_elsewhere(history).map(Ask::Remote).or_else(|| self.ask_local()),
+                        Err(e) => {
+                            self.status = format!("history failed: {e:#}");
+                            self.ask_local()
+                        }
+                    };
+                }
+            }
             Msg::Account(res) => match res {
                 Ok(name) => self.account = Some(name),
                 Err(e) => self.status = format!("{e:#}"),
@@ -536,6 +576,16 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
+            return;
+        }
+        if let Some(ask) = &self.ask {
+            let checking = matches!(ask, Ask::Checking(_));
+            match key.code {
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter if !checking => self.answer(true),
+                KeyCode::Char('n' | 'N') | KeyCode::Esc => self.answer(false),
+                KeyCode::Char('q') => self.quit = true,
+                _ => {}
+            }
             return;
         }
         if self.input.focused() {
@@ -632,12 +682,6 @@ impl App {
             KeyCode::Char('F') => self.liked(),
             KeyCode::Char('h') => self.recent(),
             KeyCode::Char('?') => self.show_help = !self.show_help,
-            KeyCode::Char('c') => {
-                if let Some(t) = self.offer.take() {
-                    self.start_radio(t);
-                    self.focus = Focus::Player;
-                }
-            }
             _ => {}
         }
     }
@@ -663,6 +707,11 @@ impl App {
         }
         if self.player.finished() {
             self.next();
+        }
+        if let Some(Ask::Checking(since)) = self.ask
+            && since.elapsed() >= ASK_WAIT
+        {
+            self.ask = self.ask_local();
         }
         let vol = self.player.volume();
         if vol != self.vol_seen {
@@ -776,6 +825,8 @@ fn main() -> Result<()> {
     if let Some(s) = session::load() {
         app.restore(s, query.is_empty());
     }
+    // Signed in, first find out whether another device played since.
+    app.ask = if yt::signed_in() { Some(Ask::Checking(Instant::now())) } else { app.ask_local() };
     if !query.is_empty() {
         let q = query.join(" ");
         app.input.set_value(q.clone());

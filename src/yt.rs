@@ -6,6 +6,7 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -37,10 +38,17 @@ pub const JS_RUNTIMES: [&str; 8] =
 const LIKED_MAX: usize = 1000;
 
 static AUTH: OnceLock<Auth> = OnceLock::new();
+/// The brand-account channel to act as (its page id), when not the main one.
+static CHANNEL: OnceLock<String> = OnceLock::new();
 
 /// Act as this account from now on.
 pub fn sign_in(a: Auth) {
     let _ = AUTH.set(a);
+}
+
+/// Act as one of the login's brand-account channels (see `channels`).
+pub fn act_as(page_id: String) {
+    let _ = CHANNEL.set(page_id);
 }
 
 pub fn signed_in() -> bool {
@@ -65,6 +73,9 @@ fn request(endpoint: &str, mut body: Value, auth: Option<&Auth>) -> Result<Value
     body["context"] = json!({
         "client": { "clientName": "WEB_REMIX", "clientVersion": "1.20250101.01.00", "hl": "en", "gl": "US" }
     });
+    if let (Some(_), Some(page_id)) = (auth, CHANNEL.get()) {
+        body["context"]["user"] = json!({ "onBehalfOfUser": page_id });
+    }
     let mut req = ureq::post(format!("{BASE}/{endpoint}?prettyPrint=false"))
         .header("Origin", auth::ORIGIN)
         .header("X-Origin", auth::ORIGIN)
@@ -269,6 +280,50 @@ pub fn history() -> Result<Vec<Track>> {
     Ok(items.into_iter().filter_map(parse_list_item).collect())
 }
 
+/// What a history response is made of, for `--history` when nothing parses:
+/// how many items it had, the renderer names in it with counts, and any notice
+/// texts. No song or account details.
+pub fn history_shape() -> Result<String> {
+    let resp = post_signed("browse", json!({ "browseId": "FEmusic_history" }))?;
+    let mut items = Vec::new();
+    find(&resp, "musicResponsiveListItemRenderer", &mut items);
+    let parsed = items.iter().filter(|r| parse_list_item(r).is_some()).count();
+    fn walk(v: &Value, names: &mut BTreeMap<String, usize>) {
+        match v {
+            Value::Object(m) => {
+                for (k, child) in m {
+                    if k.ends_with("Renderer") || k.ends_with("Model") {
+                        *names.entry(k.clone()).or_default() += 1;
+                    }
+                    walk(child, names);
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|c| walk(c, names)),
+            _ => {}
+        }
+    }
+    let mut names = BTreeMap::new();
+    walk(&resp, &mut names);
+    let keys: Vec<&String> = resp.as_object().map(|m| m.keys().collect()).unwrap_or_default();
+    let mut out = format!("list items: {}, parsed: {parsed}\ntop-level keys: {keys:?}\nrenderers:\n", items.len());
+    for (k, n) in names {
+        out += &format!("  {k} ×{n}\n");
+    }
+    for key in ["messageRenderer", "musicMessageRenderer", "backgroundPromoRenderer", "alertRenderer"] {
+        let mut found = Vec::new();
+        find(&resp, key, &mut found);
+        for m in found {
+            for part in ["title", "text", "subtext"] {
+                let t = text(&m[part]);
+                if !t.is_empty() {
+                    out += &format!("notice: {key}.{part}: {t}\n");
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Add a play to the account's history, as the official apps do, by having
 /// yt-dlp send the playback stats ping.
 pub fn report_play(video_id: &str) -> Result<()> {
@@ -278,6 +333,8 @@ pub fn report_play(video_id: &str) -> Result<()> {
         .args(JS_RUNTIMES)
         .arg("--cookies")
         .arg(jar.path())
+        // A brand-account channel, so the play lands in its history.
+        .args(CHANNEL.get().map(|id| ["--add-headers".to_string(), format!("X-Goog-PageId:{id}")]).into_iter().flatten())
         .arg(format!("https://music.youtube.com/watch?v={video_id}"))
         .output()
         .context("running yt-dlp (is it installed?)")?;
@@ -309,6 +366,61 @@ pub fn account_name_as(auth: &Auth) -> Result<String> {
         Some("0") => bail!("YouTube treated the cookies as signed out (expired, or signed out in the browser)"),
         _ => bail!("YouTube didn't return an account name"),
     }
+}
+
+/// An identity tuber can act as: one of the browser's signed-in Google
+/// accounts, or a brand-account channel it manages.
+pub struct Channel {
+    pub name: String,
+    pub byline: String,
+    /// Google account index (`X-Goog-AuthUser`).
+    pub authuser: u8,
+    /// `None` for the account's own channel.
+    pub page_id: Option<String>,
+}
+
+impl Channel {
+    /// Whether tuber currently acts as this one.
+    pub fn current(&self) -> bool {
+        AUTH.get().map(|a| a.authuser) == Some(self.authuser) && self.page_id.as_ref() == CHANNEL.get()
+    }
+}
+
+/// Every identity the cookies can act as: each signed-in Google account
+/// (one browser session can hold several) with its brand-account channels.
+/// History, likes and playlists belong to one of them, so YouTube Music on a
+/// phone may use a different one than tuber's default (the first account).
+pub fn channels() -> Result<Vec<Channel>> {
+    let base = AUTH.get().context("not signed in")?;
+    let label = |v: &Value| v["simpleText"].as_str().map(String::from).unwrap_or_else(|| text(v));
+    let mut all: Vec<Channel> = Vec::new();
+    for authuser in 0..8u8 {
+        let mut auth = base.clone();
+        auth.authuser = authuser;
+        // Past the last signed-in account YouTube errors or repeats one.
+        let Ok(resp) = request("account/accounts_list", json!({}), Some(&auth)) else { break };
+        let mut items = Vec::new();
+        find(&resp, "accountItem", &mut items);
+        let found: Vec<Channel> = items
+            .into_iter()
+            .map(|a| {
+                let mut ids = Vec::new();
+                find(&a["serviceEndpoint"], "pageId", &mut ids);
+                Channel {
+                    name: label(&a["accountName"]),
+                    byline: label(&a["accountByline"]),
+                    authuser,
+                    page_id: ids.first().and_then(|v| v.as_str()).map(String::from),
+                }
+            })
+            .collect();
+        let new = found.first().is_some_and(|f| !all.iter().any(|c| c.name == f.name && c.byline == f.byline));
+        if !new {
+            break;
+        }
+        all.extend(found);
+    }
+    Ok(all)
 }
 
 /// Resolve a direct audio stream URL. yt-dlp handles signature deciphering and

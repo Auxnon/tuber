@@ -61,6 +61,9 @@ tuber --login chrome              # or every profile of one browser: chrome, fir
 tuber --login 'chrome:Profile 1'  # or one profile
 tuber --login chrome+gnomekeyring # if Chrome's cookies won't decrypt, name the keyring (gnomekeyring, kwallet, basictext)
 tuber --logout
+tuber --accounts                  # list the Google accounts and brand channels the cookies can act as
+tuber --accounts 2                # act as one of them
+tuber --history                   # show the account's recent plays, to check it's the one your phone uses
 ```
 
 Sign in to [music.youtube.com](https://music.youtube.com) in your browser first. `--login` has yt-dlp copy that browser's YouTube cookies into `~/.local/state/tuber/cookies.txt`, readable only by you, and checks them by fetching your account name. While signed in:
@@ -73,6 +76,8 @@ Sign in to [music.youtube.com](https://music.youtube.com) in your browser first.
 - `h` shows your account's history, including plays on other devices,
 - radio mixes and search are personalised to your account,
 - yt-dlp gets the cookies too, for Premium audio quality and age-restricted tracks.
+
+History, likes and playlists belong to one Google account (or brand channel). If tuber's history doesn't match your phone's, check `tuber --history`: sign in to music.youtube.com in the browser with the account your phone uses, run `--login` again, and pick it with `--accounts` if the browser holds several.
 
 The cookies are as powerful as your browser's YouTube session, so treat the file like a password. Signing out of YouTube in the browser invalidates them; run `--login` again. If YouTube rejects them, search, radio and playback keep working anonymously. With Chrome-family browsers the keyring may ask for permission the first time, and `--login` tells you if `secretstorage` is missing.
 

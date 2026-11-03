@@ -777,18 +777,58 @@ const USAGE: &str = "\
 usage: tuber [search terms...]
        tuber --login [browser]   sign in with a browser's YouTube session
        tuber --logout            forget the sign-in
+       tuber --accounts [N]      list the login's YouTube channels, or act as channel N
        tuber --history           show the account's recent plays, and what launch would offer
 
 Signing in is optional. It copies the YouTube cookies of a browser that's
 signed in to music.youtube.com (chrome, firefox, brave, chromium, edge,
 vivaldi, opera; every profile is tried by default) into ~/.local/state/tuber/cookies.txt.";
 
+/// Sign in from the saved cookies and chosen channel.
+fn sign_in() -> bool {
+    let Some(mut a) = auth::Auth::load() else { return false };
+    let (authuser, page_id) = auth::load_identity();
+    a.authuser = authuser;
+    yt::sign_in(a);
+    if let Some(page_id) = page_id {
+        yt::act_as(page_id);
+    }
+    true
+}
+
+/// List the login's channels, or with a number, act as that one from now on.
+fn accounts(pick: Option<&String>) -> Result<()> {
+    anyhow::ensure!(sign_in(), "not signed in: run `tuber --login`");
+    let channels = yt::channels()?;
+    anyhow::ensure!(!channels.is_empty(), "YouTube didn't list any channels for this login");
+    if let Some(n) = pick {
+        let c = n.parse::<usize>().ok().and_then(|n| channels.get(n.wrapping_sub(1))).context("no channel with that number")?;
+        auth::save_identity(c.authuser, c.page_id.as_deref())?;
+        println!("tuber now acts as {}", c.name);
+        return Ok(());
+    }
+    for (i, c) in channels.iter().enumerate() {
+        let mark = if c.current() { "  ← tuber uses this" } else { "" };
+        let kind = match (c.authuser, &c.page_id) {
+            (0, None) => " (first Google account)".to_string(),
+            (n, None) => format!(" (Google account {})", n + 1),
+            (_, Some(_)) => " (brand channel)".to_string(),
+        };
+        println!("{}. {}{kind} · {}{mark}", i + 1, c.name, c.byline);
+    }
+    println!("pick the one your phone uses with: tuber --accounts N");
+    Ok(())
+}
+
 /// The account's newest plays as tuber sees them, and the launch decision.
 fn print_history() -> Result<()> {
-    yt::sign_in(auth::Auth::load().context("not signed in: run `tuber --login`")?);
+    anyhow::ensure!(sign_in(), "not signed in: run `tuber --login`");
     println!("account: {}", yt::account_name()?);
     let history = yt::history()?;
     println!("history ({} entries), newest first:", history.len());
+    if history.is_empty() {
+        println!("response shape (no song or account details):\n{}", yt::history_shape()?);
+    }
     for t in history.iter().take(8) {
         println!("  {}  {} — {}", t.id, t.title, t.artist);
     }
@@ -814,6 +854,7 @@ fn command(args: &[String]) -> Option<Result<()>> {
             Err(e) => return Some(Err(e)),
         },
         Some("--history") => return Some(print_history()),
+        Some("--accounts") => return Some(accounts(args.get(1))),
         Some("--login") => {
             return Some((|| {
                 let (profile, name) = auth::login(args.get(1).cloned(), yt::account_name_as)?;
@@ -838,8 +879,7 @@ fn main() -> Result<()> {
     app.mpris = Mpris::new(move |e| {
         let _ = tx.send(Msg::Media(e));
     });
-    if let Some(a) = auth::Auth::load() {
-        yt::sign_in(a);
+    if sign_in() {
         app.status = "signed in — type to search, F for liked songs".into();
         app.spawn(|| Msg::Account(yt::account_name()));
         app.spawn(|| Msg::History(yt::history()));

@@ -32,7 +32,11 @@ const BROWSERS: [(&str, &str); 10] = [
     ("chromium", "snap/chromium/common/chromium"),
 ];
 
+#[derive(Clone)]
 pub struct Auth {
+    /// Which of the browser's signed-in Google accounts to act as (0 is the
+    /// first); one set of cookies covers them all.
+    pub authuser: u8,
     cookie: String,
     sapisid: String,
     /// `__Secure-1PAPISID` / `__Secure-3PAPISID`, which browsers also sign with.
@@ -43,6 +47,32 @@ pub struct Auth {
 /// The cookie jar, next to the session file. Readable by you only.
 pub fn path() -> Option<PathBuf> {
     session::state_dir().map(|d| d.join("cookies.txt"))
+}
+
+/// The identity chosen with `tuber --accounts N`: the Google account index,
+/// then a brand-account page id if it's one of that account's channels.
+/// Absent means the first account's own channel.
+fn identity_path() -> Option<PathBuf> {
+    session::state_dir().map(|d| d.join("identity"))
+}
+
+pub fn load_identity() -> (u8, Option<String>) {
+    let saved = identity_path().and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
+    let mut parts = saved.split_whitespace();
+    let authuser = parts.next().and_then(|a| a.parse().ok()).unwrap_or(0);
+    (authuser, parts.next().map(String::from))
+}
+
+pub fn save_identity(authuser: u8, page_id: Option<&str>) -> Result<()> {
+    let path = identity_path().context("no state directory")?;
+    if authuser == 0 && page_id.is_none() {
+        return match fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        };
+    }
+    fs::write(path, format!("{authuser} {}", page_id.unwrap_or_default()).trim_end())?;
+    Ok(())
 }
 
 impl Auth {
@@ -65,7 +95,7 @@ impl Auth {
         [
             ("Cookie", self.cookie.clone()),
             ("Authorization", authorization),
-            ("X-Goog-AuthUser", "0".into()),
+            ("X-Goog-AuthUser", self.authuser.to_string()),
         ]
     }
 }
@@ -94,6 +124,7 @@ fn parse(jar: &str) -> Option<Auth> {
     let get = |name: &str| cookies.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
     let sapisid_3p = get("__Secure-3PAPISID");
     Some(Auth {
+        authuser: 0,
         sapisid: get("SAPISID").or_else(|| sapisid_3p.clone())?,
         sapisid_1p: get("__Secure-1PAPISID"),
         sapisid_3p,
@@ -286,6 +317,7 @@ pub fn login(spec: Option<String>, verify: impl Fn(&Auth) -> Result<String>) -> 
 
 /// Forget the sign-in. Returns whether there was one.
 pub fn logout() -> Result<bool> {
+    save_identity(0, None)?;
     match path().map(fs::remove_file) {
         Some(Ok(())) => Ok(true),
         Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),

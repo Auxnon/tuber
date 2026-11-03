@@ -138,7 +138,18 @@ fn parse(jar: &str) -> Option<Auth> {
 /// most recently used first, since yt-dlp alone only reads one of them.
 fn candidates(spec: Option<&str>) -> Vec<String> {
     if let Some(s) = spec.filter(|s| s.contains(':')) {
-        return vec![s.to_string()];
+        return vec![resolve_profile(s)];
+    }
+    // A profile's display name or email on its own: `tuber --login me@example.com`.
+    if let Some(s) = spec.filter(|s| !BROWSERS.iter().any(|(b, _)| s.split('+').next() == Some(b))) {
+        let matches: Vec<String> = chromium_profiles()
+            .into_iter()
+            .filter(|p| p.matches(s))
+            .map(|p| format!("{}:{}", p.browser, p.dir))
+            .collect();
+        if !matches.is_empty() {
+            return matches;
+        }
     }
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
     let mut found: Vec<(SystemTime, String)> = Vec::new();
@@ -168,6 +179,59 @@ fn candidates(spec: Option<&str>) -> Vec<String> {
         specs.push(s.to_string()); // unknown layout; let yt-dlp pick
     }
     specs
+}
+
+/// A Chromium-family browser profile: its folder, and the name and email the
+/// browser shows for it.
+struct Profile {
+    browser: &'static str,
+    dir: String,
+    name: String,
+    email: String,
+}
+
+impl Profile {
+    fn matches(&self, s: &str) -> bool {
+        self.dir == s || self.name.eq_ignore_ascii_case(s) || (!self.email.is_empty() && self.email.eq_ignore_ascii_case(s))
+    }
+}
+
+/// Profiles listed in a Chromium `Local State` file (`profile.info_cache`).
+fn profiles_in(browser: &'static str, local_state: &[u8]) -> Vec<Profile> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(local_state) else { return Vec::new() };
+    let field = |p: &serde_json::Value, k: &str| p[k].as_str().unwrap_or_default().to_string();
+    let mut out: Vec<Profile> = v["profile"]["info_cache"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(dir, p)| Profile { browser, dir: dir.clone(), name: field(p, "name"), email: field(p, "user_name") })
+        .collect();
+    out.sort_by(|a, b| a.dir.cmp(&b.dir));
+    out
+}
+
+/// Every installed Chromium-family browser's profiles. Firefox profiles are
+/// named by folder already.
+fn chromium_profiles() -> Vec<Profile> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
+    BROWSERS
+        .iter()
+        .filter(|(b, _)| *b != "firefox")
+        .filter_map(|(b, dir)| Some(profiles_in(b, &fs::read(home.join(dir).join("Local State")).ok()?)))
+        .flatten()
+        .collect()
+}
+
+/// `chrome:Nick` or `chrome:me@example.com` to the profile's folder,
+/// `chrome:Profile 2`, which is what yt-dlp takes.
+fn resolve_profile(spec: &str) -> String {
+    let Some((browser, profile)) = spec.split_once(':') else { return spec.to_string() };
+    let name = browser.split('+').next().unwrap_or(browser);
+    let profiles: Vec<Profile> = chromium_profiles().into_iter().filter(|p| p.browser == name).collect();
+    match profiles.iter().find(|p| p.dir == profile).or_else(|| profiles.iter().find(|p| p.matches(profile))) {
+        Some(p) => format!("{browser}:{}", p.dir),
+        None => spec.to_string(),
+    }
 }
 
 /// A private copy of the cookie jar for one yt-dlp run, deleted on drop.
@@ -308,9 +372,17 @@ pub fn login(spec: Option<String>, verify: impl Fn(&Auth) -> Result<String>) -> 
         let why = if notes.is_empty() { "not signed in to YouTube".into() } else { notes.join("\n    ") };
         report.push(format!("  {s}: {why}"));
     }
+    let known: Vec<String> = chromium_profiles()
+        .iter()
+        .map(|p| {
+            let email = if p.email.is_empty() { String::new() } else { format!(" <{}>", p.email) };
+            format!("  {}:{}  {}{email}", p.browser, p.dir, p.name)
+        })
+        .collect();
+    let known = if known.is_empty() { String::new() } else { format!("\nprofiles (name one by folder, name or email):\n{}", known.join("\n")) };
     bail!(
         "no browser profile had a YouTube sign-in. Sign in at {ORIGIN}, or name the profile, \
-         e.g. `tuber --login 'chrome:Profile 1'`.\n{}",
+         e.g. `tuber --login 'chrome:Profile 1'` or `tuber --login me@example.com`.\n{}{known}",
         report.join("\n")
     )
 }
@@ -329,6 +401,17 @@ pub fn logout() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_names() {
+        let state = br#"{"profile":{"info_cache":{
+            "Profile 2":{"name":"Work","user_name":"me@work.example"},
+            "Default":{"name":"Nick","user_name":""}}}}"#;
+        let ps = profiles_in("chrome", state);
+        assert_eq!(ps.iter().map(|p| p.dir.as_str()).collect::<Vec<_>>(), ["Default", "Profile 2"]);
+        assert!(ps[0].matches("nick") && !ps[0].matches(""));
+        assert!(ps[1].matches("ME@work.example") && ps[1].matches("Profile 2"));
+    }
 
     #[test]
     fn parses_jar() {

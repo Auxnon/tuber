@@ -58,7 +58,9 @@ tuber daft punk      # search straight away
 ```sh
 tuber --login                     # try every browser profile, most recently used first
 tuber --login chrome              # or every profile of one browser: chrome, firefox, brave, chromium, edge, vivaldi, opera
-tuber --login 'chrome:Profile 1'  # or one profile
+tuber --login 'chrome:Profile 1'  # or one profile, by folder,
+tuber --login Nick                # by the name Chrome shows for it,
+tuber --login me@example.com      # or by the profile's Google account
 tuber --login chrome+gnomekeyring # if Chrome's cookies won't decrypt, name the keyring (gnomekeyring, kwallet, basictext)
 tuber --logout
 tuber --accounts                  # list the Google accounts and brand channels the cookies can act as

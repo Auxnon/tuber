@@ -816,6 +816,7 @@ fn accounts(pick: Option<&String>) -> Result<()> {
         };
         println!("{}. {}{kind} · {}{mark}", i + 1, c.name, c.byline);
     }
+    println!("tuber's current account email: {}", yt::account_email().as_deref().unwrap_or("(YouTube didn't say)"));
     println!("pick the one your phone uses with: tuber --accounts N");
     Ok(())
 }
@@ -858,7 +859,8 @@ fn command(args: &[String]) -> Option<Result<()>> {
         Some("--login") => {
             return Some((|| {
                 let (profile, name) = auth::login(args.get(1).cloned(), yt::account_name_as)?;
-                println!("signed in as {name} (from {profile})");
+                let email = sign_in().then(yt::account_email).flatten().map(|e| format!(" <{e}>")).unwrap_or_default();
+                println!("signed in as {name}{email} (from {profile})");
                 Ok(())
             })());
         }

@@ -344,6 +344,16 @@ pub fn report_play(video_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Email address of the account tuber acts as, if YouTube's account menu
+/// shows one.
+pub fn account_email() -> Option<String> {
+    let resp = post_signed("account/account_menu", json!({})).ok()?;
+    let mut found = Vec::new();
+    find(&resp, "email", &mut found);
+    let v = found.first()?;
+    Some(v["simpleText"].as_str().map(String::from).unwrap_or_else(|| text(v))).filter(|e| !e.is_empty())
+}
+
 /// Display name of the signed-in account.
 pub fn account_name() -> Result<String> {
     account_name_as(AUTH.get().context("not signed in")?)

@@ -8,7 +8,7 @@ mod ui;
 mod viz;
 mod yt;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_cheese::input::InputState;
 use ratatui_cheese::list::ListState;
@@ -777,12 +777,34 @@ const USAGE: &str = "\
 usage: tuber [search terms...]
        tuber --login [browser]   sign in with a browser's YouTube session
        tuber --logout            forget the sign-in
+       tuber --history           show the account's recent plays, and what launch would offer
 
 Signing in is optional. It copies the YouTube cookies of a browser that's
 signed in to music.youtube.com (chrome, firefox, brave, chromium, edge,
 vivaldi, opera; every profile is tried by default) into ~/.local/state/tuber/cookies.txt.";
 
-/// `--login`/`--logout`/`--help`; `Some` means handled, so exit.
+/// The account's newest plays as tuber sees them, and the launch decision.
+fn print_history() -> Result<()> {
+    yt::sign_in(auth::Auth::load().context("not signed in: run `tuber --login`")?);
+    println!("account: {}", yt::account_name()?);
+    let history = yt::history()?;
+    println!("history ({} entries), newest first:", history.len());
+    for t in history.iter().take(8) {
+        println!("  {}  {} — {}", t.id, t.title, t.artist);
+    }
+    let s = session::load().unwrap_or_default();
+    let here: Vec<&Track> = s.current.and_then(|c| s.queue.get(..=c)).unwrap_or_default().iter().collect();
+    match history.first() {
+        None => println!("launch would offer: nothing from other devices (history is empty)"),
+        Some(t) if here.iter().any(|h| h.id == t.id) => {
+            println!("launch would offer: this computer's session ({} was played here)", t.title)
+        }
+        Some(t) => println!("launch would offer: {} — {} from another device", t.title, t.artist),
+    }
+    Ok(())
+}
+
+/// `--login`/`--logout`/`--history`/`--help`; `Some` means handled, so exit.
 fn command(args: &[String]) -> Option<Result<()>> {
     match args.first().map(String::as_str) {
         Some("-h" | "--help") => println!("{USAGE}"),
@@ -791,6 +813,7 @@ fn command(args: &[String]) -> Option<Result<()>> {
             Ok(false) => println!("wasn't signed in"),
             Err(e) => return Some(Err(e)),
         },
+        Some("--history") => return Some(print_history()),
         Some("--login") => {
             return Some((|| {
                 let (profile, name) = auth::login(args.get(1).cloned(), yt::account_name_as)?;
